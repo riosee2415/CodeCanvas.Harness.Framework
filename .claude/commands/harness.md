@@ -46,8 +46,25 @@
 ```
 
 - `dir`: task 디렉토리명.
-- `status`: `"pending"` | `"completed"` | `"error"` | `"blocked"`. execute.py가 실행 중 자동으로 업데이트한다.
+- `status`: `"pending"` | `"running"` | `"completed"` | `"error"` | `"blocked"`. execute.py가 실행 중 자동으로 업데이트한다.
 - 타임스탬프(`completed_at`, `failed_at`, `blocked_at`)는 execute.py가 상태 변경 시 자동 기록한다. 생성 시 넣지 않는다.
+
+**라이브 하트비트 (실행 중 진행 상태 공개):** step은 한 번에 최대 30분까지 걸릴 수 있다. execute.py는 실행 중인 phase 항목에 **60초마다** 아래 라이브 필드를 갱신해, 사용자가 외부에서 진행 상황을 실시간으로 볼 수 있게 한다. 터미널 상태(completed/error/blocked)로 전이하면 이 필드들은 자동 제거된다.
+
+| 필드 | 의미 |
+|------|------|
+| `status` | 실행 중에는 `"running"` |
+| `running_step` | 현재 step 번호와 이름 (예: `"2 (ui)"`) |
+| `progress` | 완료된 step 수 / 전체 (예: `"2/3"`) |
+| `attempt` | 현재 재시도 회차 (1부터) |
+| `elapsed_seconds` | 현재 step 누적 실행 시간(초) |
+| `heartbeat_at` | 마지막 하트비트 기록 시각 (이 값이 60초 넘게 멈춰 있으면 프로세스 중단을 의심) |
+
+모니터링 예시:
+
+```bash
+watch -n5 'cat phases/index.json'   # 5초마다 전체 phase 상태 출력
+```
 
 #### D-2. `phases/{task-name}/index.json` (task 상세)
 
@@ -139,13 +156,32 @@ python3 scripts/execute.py {task-name} --push  # 실행 후 push
 execute.py가 자동으로 처리하는 것:
 
 - `feat-{task-name}` 브랜치 생성/checkout
-- 가드레일 주입 — CLAUDE.md + docs/*.md 내용을 매 step 프롬프트에 포함
+- 가드레일 주입 — CLAUDE.md + `.claude/rules/*.md` + docs/*.md 내용을 매 step 프롬프트에 포함
 - 컨텍스트 누적 — 완료된 step의 summary를 다음 step 프롬프트에 전달
 - 자가 교정 — 실패 시 최대 3회 재시도하며, 이전 에러 메시지를 프롬프트에 피드백
 - 2단계 커밋 — 코드 변경(`feat`)과 메타데이터(`chore`)를 분리 커밋
 - 타임스탬프 — started_at, completed_at, failed_at, blocked_at 자동 기록
+- 라이브 하트비트 — 실행 중인 step의 진행 상태를 60초마다 `phases/index.json`에 기록 (외부에서 실시간 모니터링 가능)
+- 규칙 신선도 점검 — 시작 시 검토 대기 제안·staleness 경고 표면화 (F 참조)
 
 에러 복구:
 
 - **error 발생 시**: `phases/{task-name}/index.json`에서 해당 step의 `status`를 `"pending"`으로 바꾸고 `error_message`를 삭제한 뒤 재실행한다.
 - **blocked 발생 시**: `blocked_reason`에 적힌 사유를 해결한 뒤, `status`를 `"pending"`으로 바꾸고 `blocked_reason`을 삭제한 뒤 재실행한다.
+
+### F. 규칙 신선도 (Rules Freshness)
+
+프로젝트가 진화하면 규칙은 낡는다(stale). 하네스는 `.claude/rules/rules.md`를 **항상 fresh하게** 유지하기 위한 루프를 갖는다.
+
+**근거:** 사람이 큐레이션한 규칙만 에이전트 성과를 높인다. LLM이 자동 생성한 context 파일은 오히려 task 성공률을 ~3% 낮추고 추론 비용을 20%+ 올렸다 (ETH Zurich, arXiv 2602.11988). 따라서 하네스는 규칙을 **자동으로 덮어쓰지 않고**, 후보를 모아 **사람이 검토 후 병합**하게 한다.
+
+루프 (propose → review → merge):
+
+1. **propose (자동, 실행 중)** — 각 step 에이전트는 새 컨벤션/결정을 확립하거나 기존 규칙이 코드와 어긋남을 발견하면 `phases/{task-name}/rules-proposals.md`에 `- 제안: <규칙> (근거: <왜>)`를 append한다. CLAUDE.md·rules.md를 직접 수정하지 않는다.
+2. **review (자동, 시작 시)** — `execute.py`는 실행 시작 시 아래 신호를 경고로 표면화한다:
+   - 검토 대기 중인 `rules-proposals.md` 존재
+   - `rules.md`가 `STALE_AFTER_DAYS`(기본 14일) 이상 리뷰되지 않음 (`<!-- harness:freshness last_reviewed=YYYY-MM-DD -->` 헤더 기준)
+   - 규칙/CLAUDE.md가 `package.json`에 없는 `npm run <x>`를 참조 (stale 가능)
+3. **merge (수동, 사람)** — 사람이 제안을 취사선택해 `.claude/rules/rules.md`에 반영하고, 병합한 `rules-proposals.md`를 삭제한 뒤 `last_reviewed=`를 오늘 날짜로 갱신한다.
+
+규칙을 추가/수정하는 트리거(Anthropic): ① 같은 실수 2번째 ② 코드 리뷰가 에이전트가 알았어야 할 것을 잡아냄 ③ 같은 교정 재입력 ④ 새 팀원이 필요로 할 맥락. 추가만큼 **가지치기**도 중요하다 — "이 줄을 지우면 에이전트가 실수하게 되는가? 아니면 삭제."

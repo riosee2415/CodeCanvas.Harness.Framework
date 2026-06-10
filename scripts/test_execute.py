@@ -321,6 +321,67 @@ class TestUpdateTopIndex:
         executor._top_index_file = tmp_path / "nonexistent.json"
         executor._update_top_index("completed")  # should not raise
 
+    def test_clears_live_fields_on_terminal(self, executor, top_index):
+        data = json.loads(top_index.read_text())
+        mvp = next(p for p in data["phases"] if p["dir"] == "0-mvp")
+        mvp.update({"status": "running", "running_step": "2 (ui)", "attempt": 1,
+                    "elapsed_seconds": 120, "progress": "2/3", "heartbeat_at": "x"})
+        top_index.write_text(json.dumps(data, indent=2))
+
+        executor._top_index_file = top_index
+        executor._update_top_index("completed")
+
+        after = json.loads(top_index.read_text())
+        mvp = next(p for p in after["phases"] if p["dir"] == "0-mvp")
+        assert mvp["status"] == "completed"
+        for k in ("running_step", "attempt", "elapsed_seconds", "progress", "heartbeat_at"):
+            assert k not in mvp
+
+
+# ---------------------------------------------------------------------------
+# _write_heartbeat / _heartbeat
+# ---------------------------------------------------------------------------
+
+class TestHeartbeat:
+    def test_writes_live_status(self, executor, top_index):
+        executor._top_index_file = top_index
+        executor._write_heartbeat(2, "ui", attempt=1, done=2, elapsed=65)
+        data = json.loads(top_index.read_text())
+        mvp = next(p for p in data["phases"] if p["dir"] == "0-mvp")
+        assert mvp["status"] == "running"
+        assert mvp["running_step"] == "2 (ui)"
+        assert mvp["progress"] == "2/3"
+        assert mvp["attempt"] == 1
+        assert mvp["elapsed_seconds"] == 65
+        assert "heartbeat_at" in mvp
+
+    def test_only_target_phase_updated(self, executor, top_index):
+        executor._top_index_file = top_index
+        executor._write_heartbeat(2, "ui", attempt=1, done=2, elapsed=10)
+        data = json.loads(top_index.read_text())
+        polish = next(p for p in data["phases"] if p["dir"] == "1-polish")
+        assert polish["status"] == "pending"
+        assert "running_step" not in polish
+
+    def test_no_top_index_is_noop(self, executor, tmp_path):
+        executor._top_index_file = tmp_path / "nonexistent.json"
+        executor._write_heartbeat(2, "ui", attempt=1, done=2, elapsed=10)  # should not raise
+
+    def test_corrupt_top_index_is_noop(self, executor, top_index):
+        top_index.write_text("{ not valid json")
+        executor._top_index_file = top_index
+        executor._write_heartbeat(2, "ui", attempt=1, done=2, elapsed=10)  # should not raise
+
+    def test_context_manager_writes_at_least_once(self, executor, top_index):
+        import time
+        executor._top_index_file = top_index
+        with executor._heartbeat(2, "ui", attempt=1, done=2, interval=60):
+            time.sleep(0.05)
+        data = json.loads(top_index.read_text())
+        mvp = next(p for p in data["phases"] if p["dir"] == "0-mvp")
+        assert mvp["status"] == "running"
+        assert mvp["elapsed_seconds"] >= 0
+
 
 # ---------------------------------------------------------------------------
 # _checkout_branch (mocked)
@@ -557,3 +618,79 @@ class TestCheckBlockers:
         with pytest.raises(SystemExit) as exc_info:
             inst._check_blockers()
         assert exc_info.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# 규칙 신선도 (rules freshness)
+# ---------------------------------------------------------------------------
+
+class TestRulesFreshness:
+    def _mk_rules(self, tmp_project, content="# rules\n- rule a"):
+        rd = tmp_project / ".claude" / "rules"
+        rd.mkdir(parents=True, exist_ok=True)
+        (rd / "rules.md").write_text(content)
+        return rd
+
+    def test_rules_files_empty_when_no_dir(self, executor, tmp_project):
+        with patch.object(ex, "ROOT", tmp_project):
+            assert executor._rules_files() == []
+
+    def test_rules_files_lists_md(self, executor, tmp_project):
+        self._mk_rules(tmp_project)
+        with patch.object(ex, "ROOT", tmp_project):
+            files = executor._rules_files()
+        assert [f.name for f in files] == ["rules.md"]
+
+    def test_guardrails_includes_rules(self, executor, tmp_project):
+        self._mk_rules(tmp_project, "# rules\n- 항상 UTC 사용")
+        with patch.object(ex, "ROOT", tmp_project):
+            result = executor._load_guardrails()
+        assert "항상 UTC 사용" in result
+        assert ".claude/rules/rules.md" in result
+
+    def test_stale_command_refs_flags_missing(self, executor, tmp_project):
+        (tmp_project / "package.json").write_text(
+            json.dumps({"scripts": {"build": "x", "test": "y"}}))
+        self._mk_rules(tmp_project, "규칙: `npm run lint` 후 `npm run typecheck` 실행")
+        with patch.object(ex, "ROOT", tmp_project):
+            missing = executor._stale_command_refs(executor._rules_files())
+        assert "lint" in missing
+        assert "typecheck" in missing
+        assert "build" not in missing
+
+    def test_stale_command_refs_no_pkg_is_empty(self, executor, tmp_project):
+        self._mk_rules(tmp_project, "`npm run lint`")
+        with patch.object(ex, "ROOT", tmp_project):
+            assert executor._stale_command_refs(executor._rules_files()) == []
+
+    def test_freshness_silent_when_no_rules(self, executor, tmp_project, capsys):
+        with patch.object(ex, "ROOT", tmp_project):
+            executor._check_rules_freshness()
+        assert capsys.readouterr().out == ""
+
+    def test_freshness_warns_pending_proposals(self, executor, tmp_project, capsys):
+        self._mk_rules(tmp_project)
+        (tmp_project / "phases" / "0-mvp" / "rules-proposals.md").write_text("- 제안: x")
+        with patch.object(ex, "ROOT", tmp_project):
+            executor._check_rules_freshness()
+        assert "검토 대기" in capsys.readouterr().out
+
+    def test_freshness_warns_stale_date(self, executor, tmp_project, capsys):
+        self._mk_rules(tmp_project,
+                       "<!-- harness:freshness last_reviewed=2000-01-01 -->\n# rules")
+        with patch.object(ex, "ROOT", tmp_project):
+            executor._check_rules_freshness()
+        assert "리뷰되지 않" in capsys.readouterr().out
+
+    def test_freshness_fresh_date_no_stale_warn(self, executor, tmp_project, capsys):
+        today = datetime.now(ex.StepExecutor.TZ).date().isoformat()
+        self._mk_rules(tmp_project,
+                       f"<!-- harness:freshness last_reviewed={today} -->\n# rules")
+        with patch.object(ex, "ROOT", tmp_project):
+            executor._check_rules_freshness()
+        assert "리뷰되지 않" not in capsys.readouterr().out
+
+    def test_preamble_includes_proposals_instruction(self, executor):
+        result = executor._build_preamble("", "")
+        assert "rules-proposals.md" in result
+        assert "신선도" in result

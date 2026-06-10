@@ -10,6 +10,7 @@ import argparse
 import contextlib
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -57,6 +58,7 @@ class StepExecutor:
     FEAT_MSG = "feat({phase}): step {num} — {name}"
     CHORE_MSG = "chore({phase}): step {num} output"
     TZ = timezone(timedelta(hours=9))
+    STALE_AFTER_DAYS = 14  # rules.md가 이 일수 이상 리뷰되지 않으면 경고
 
     def __init__(self, phase_dir_name: str, *, auto_push: bool = False):
         self._root = str(ROOT)
@@ -83,6 +85,7 @@ class StepExecutor:
     def run(self):
         self._print_header()
         self._check_blockers()
+        self._check_rules_freshness()
         self._checkout_branch()
         guardrails = self._load_guardrails()
         self._ensure_created_at()
@@ -158,6 +161,10 @@ class StepExecutor:
 
     # --- top-level index ---
 
+    # top-level index의 phase 항목에 실시간으로 기록되는 라이브 필드.
+    # 터미널 상태(completed/error/blocked)로 전이할 때 정리한다.
+    LIVE_FIELDS = ("running_step", "attempt", "elapsed_seconds", "progress", "heartbeat_at")
+
     def _update_top_index(self, status: str):
         if not self._top_index_file.exists():
             return
@@ -169,8 +176,65 @@ class StepExecutor:
                 ts_key = {"completed": "completed_at", "error": "failed_at", "blocked": "blocked_at"}.get(status)
                 if ts_key:
                     phase[ts_key] = ts
+                for k in self.LIVE_FIELDS:
+                    phase.pop(k, None)
                 break
         self._write_json(self._top_index_file, top)
+
+    # --- 라이브 하트비트 (실행 중 진행 상태 공개) ---
+
+    def _write_heartbeat(self, step_num: int, step_name: str, attempt: int,
+                         done: int, elapsed: int):
+        """현재 실행 중인 step의 상태를 top-level index.json에 1회 기록한다.
+
+        step 실행 중에는 메인 스레드가 subprocess에서 블록되고 Claude 세션은
+        phase-level index.json만 건드리므로, 이 시점에 top-level index.json을
+        쓰는 주체는 하트비트 스레드뿐이다 → 경합 없음.
+        """
+        if not self._top_index_file.exists():
+            return
+        try:
+            top = self._read_json(self._top_index_file)
+        except (json.JSONDecodeError, OSError):
+            return
+        for phase in top.get("phases", []):
+            if phase.get("dir") == self._phase_dir_name:
+                phase["status"] = "running"
+                phase["progress"] = f"{done}/{self._total}"
+                phase["running_step"] = f"{step_num} ({step_name})"
+                phase["attempt"] = attempt
+                phase["elapsed_seconds"] = elapsed
+                phase["heartbeat_at"] = self._stamp()
+                break
+        else:
+            return
+        self._write_json(self._top_index_file, top)
+
+    @contextlib.contextmanager
+    def _heartbeat(self, step_num: int, step_name: str, attempt: int,
+                   done: int, interval: int = 60):
+        """interval초(기본 60초)마다 진행 상태를 top-level index.json에 기록한다.
+
+        사용자는 `watch -n5 cat phases/index.json` 등으로 장시간 실행 중인
+        step의 진행 상황을 실시간으로 확인할 수 있다.
+        """
+        stop = threading.Event()
+        t0 = time.monotonic()
+
+        def _beat():
+            while True:
+                self._write_heartbeat(step_num, step_name, attempt, done,
+                                      int(time.monotonic() - t0))
+                if stop.wait(interval):
+                    break
+
+        th = threading.Thread(target=_beat, daemon=True)
+        th.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            th.join()
 
     # --- guardrails & context ---
 
@@ -179,11 +243,19 @@ class StepExecutor:
         claude_md = ROOT / "CLAUDE.md"
         if claude_md.exists():
             sections.append(f"## 프로젝트 규칙 (CLAUDE.md)\n\n{claude_md.read_text()}")
+        for rules_file in self._rules_files():
+            sections.append(f"## 프로젝트 규칙 (.claude/rules/{rules_file.name})\n\n{rules_file.read_text()}")
         docs_dir = ROOT / "docs"
         if docs_dir.is_dir():
             for doc in sorted(docs_dir.glob("*.md")):
                 sections.append(f"## {doc.stem}\n\n{doc.read_text()}")
         return "\n\n---\n\n".join(sections) if sections else ""
+
+    @staticmethod
+    def _rules_files() -> list:
+        """.claude/rules/ 하위의 living rules 파일들 (없으면 빈 리스트)."""
+        rules_dir = ROOT / ".claude" / "rules"
+        return sorted(rules_dir.glob("*.md")) if rules_dir.is_dir() else []
 
     @staticmethod
     def _build_step_context(index: dict) -> str:
@@ -220,7 +292,11 @@ class StepExecutor:
             f"   - AC 통과 → \"completed\" + \"summary\" 필드에 이 step의 산출물을 한 줄로 요약\n"
             f"   - {self.MAX_RETRIES}회 수정 시도 후에도 실패 → \"error\" + \"error_message\" 기록\n"
             f"   - 사용자 개입이 필요한 경우 (API 키, 인증, 수동 설정 등) → \"blocked\" + \"blocked_reason\" 기록 후 즉시 중단\n"
-            f"6. 모든 변경사항을 커밋하라:\n"
+            f"6. 규칙 신선도(rules freshness): 이 step에서 다른 step·세션도 따라야 할 새 프로젝트 컨벤션/결정을\n"
+            f"   확립했거나, 기존 규칙이 코드와 어긋남을 발견했다면 /phases/{self._phase_dir_name}/rules-proposals.md에\n"
+            f"   \"- 제안: <규칙> (근거: <왜>)\" 한 줄을 append하라 (파일이 없으면 생성). CLAUDE.md나\n"
+            f"   .claude/rules/는 직접 수정하지 마라 — 사람이 검토 후 병합한다. 제안할 것이 없으면 건너뛴다.\n"
+            f"7. 모든 변경사항을 커밋하라:\n"
             f"   {commit_example}\n\n---\n\n"
         )
 
@@ -288,6 +364,76 @@ class StepExecutor:
             index["created_at"] = self._stamp()
             self._write_json(self._index_file, index)
 
+    # --- 규칙 신선도(rules freshness) ---
+
+    def _check_rules_freshness(self):
+        """rules.md를 fresh하게 유지하기 위한 결정적(비-LLM) 점검.
+
+        근거: 사람이 큐레이션한 규칙만 성과를 높인다(ETH arXiv 2602.11988).
+        따라서 자동으로 규칙을 덮어쓰지 않고, 신선도 신호만 표면화해 사람의
+        검토를 유도한다. 세 가지 신호를 경고로 출력한다:
+          1) 검토 대기 중인 규칙 제안(rules-proposals.md)
+          2) rules.md가 STALE_AFTER_DAYS 이상 리뷰되지 않음
+          3) 규칙/CLAUDE.md가 package.json에 없는 npm 스크립트를 참조 (stale 가능)
+        """
+        rules_files = self._rules_files()
+        if not rules_files:
+            return
+
+        warnings = []
+
+        proposals = sorted(self._phases_dir.glob("*/rules-proposals.md"))
+        if proposals:
+            rels = ", ".join(str(p.relative_to(ROOT)) for p in proposals)
+            warnings.append(
+                f"검토 대기 중인 규칙 제안 {len(proposals)}건: {rels}\n"
+                f"      → 검토 후 .claude/rules/rules.md에 병합하고, 병합한 제안 파일은 삭제하세요."
+            )
+
+        rules_md = ROOT / ".claude" / "rules" / "rules.md"
+        if rules_md.exists():
+            m = re.search(r"last_reviewed\s*=\s*(\d{4}-\d{2}-\d{2})", rules_md.read_text())
+            if m:
+                try:
+                    last = datetime.strptime(m.group(1), "%Y-%m-%d").date()
+                    age = (datetime.now(self.TZ).date() - last).days
+                    if age > self.STALE_AFTER_DAYS:
+                        warnings.append(
+                            f"rules.md가 {age}일째 리뷰되지 않았습니다 (>{self.STALE_AFTER_DAYS}일). "
+                            f"가지치기/검토 후 last_reviewed를 갱신하세요."
+                        )
+                except ValueError:
+                    pass
+
+        stale_cmds = self._stale_command_refs(rules_files)
+        if stale_cmds:
+            warnings.append(
+                f"규칙/CLAUDE.md가 package.json에 없는 npm 스크립트를 참조합니다 (stale 가능): "
+                f"{', '.join(stale_cmds)}"
+            )
+
+        if warnings:
+            print(f"\n  [rules freshness]")
+            for w in warnings:
+                print(f"  ⚠ {w}")
+
+    def _stale_command_refs(self, rules_files: list) -> list:
+        """CLAUDE.md + rules에서 참조하는 `npm run <x>` 중 package.json에 없는 것."""
+        pkg = ROOT / "package.json"
+        if not pkg.exists():
+            return []
+        try:
+            scripts = set(json.loads(pkg.read_text()).get("scripts", {}))
+        except (json.JSONDecodeError, OSError):
+            return []
+        texts = []
+        cm = ROOT / "CLAUDE.md"
+        if cm.exists():
+            texts.append(cm.read_text())
+        texts.extend(f.read_text() for f in rules_files)
+        referenced = set(re.findall(r"npm run ([A-Za-z0-9:_-]+)", "\n".join(texts)))
+        return sorted(referenced - scripts)
+
     # --- 실행 루프 ---
 
     def _execute_single_step(self, step: dict, guardrails: str) -> bool:
@@ -306,7 +452,8 @@ class StepExecutor:
                 tag += f" [retry {attempt}/{self.MAX_RETRIES}]"
 
             with progress_indicator(tag) as pi:
-                self._invoke_claude(step, preamble)
+                with self._heartbeat(step_num, step_name, attempt, done):
+                    self._invoke_claude(step, preamble)
                 elapsed = int(pi.elapsed)
 
             index = self._read_json(self._index_file)
