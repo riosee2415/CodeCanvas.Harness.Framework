@@ -342,9 +342,6 @@ class StepExecutor:
 
     def _build_preamble(self, guardrails: str, step_context: str,
                         prev_error: Optional[str] = None) -> str:
-        commit_example = self.FEAT_MSG.format(
-            phase=self._phase_name, num="N", name="<step-name>"
-        )
         d = self._phase_dir_name
         r = self.INNER_ROUNDS
         retry_section = ""
@@ -405,8 +402,9 @@ class StepExecutor:
             f"   검수 중 발견한 (반복) 실수·새 컨벤션을 /phases/{d}/rules-proposals.md에\n"
             f"   \"- 제안: <규칙> (근거: <어떤 실수를 막는지>)\" 한 줄로 append한다 (파일이 없으면 생성). CLAUDE.md나\n"
             f"   .claude/rules/는 직접 수정하지 마라 — 사람이 검토 후 병합한다(자동 생성 규칙은 성과를 낮춘다). 제안할 것이 없으면 건너뛴다.\n"
-            f"7. 모든 변경사항을 커밋하라:\n"
-            f"   {commit_example}\n\n---\n\n"
+            f"7. **직접 git add·커밋하지 마라** — 하네스(execute.py)가 step 종료 후 "
+            f"코드(feat)와 메타데이터(chore)를 분리해 자동 커밋한다. 너는 위 5번"
+            f"(index.json status·summary 갱신)까지만 하면 된다 (이중 커밋 방지).\n\n---\n\n"
         )
 
     # --- Claude 호출 ---

@@ -246,9 +246,11 @@ class TestBuildPreamble:
         result = executor._build_preamble("", ctx)
         assert "이전 Step 산출물" in result
 
-    def test_includes_commit_example(self, executor):
+    def test_tells_lead_not_to_commit(self, executor):
+        # 커밋은 하네스(execute.py)가 일원화 — 리드/세션은 직접 커밋하지 않는다(이중 커밋 방지).
         result = executor._build_preamble("", "")
-        assert "feat(mvp):" in result
+        assert "커밋하지 마라" in result
+        assert "모든 변경사항을 커밋하라" not in result
 
     def test_includes_rules(self, executor):
         result = executor._build_preamble("", "")
@@ -767,9 +769,11 @@ class TestTeamPreamble:
         assert "completed" in r
         assert "blocked" in r
 
-    def test_still_includes_commit_example(self, executor):
+    def test_lead_does_not_commit(self, executor):
+        # 커밋은 하네스가 일원화 — 프리앰블은 리드에게 직접 커밋하지 말라고 한다(이중 커밋 방지).
         r = executor._build_preamble("", "")
-        assert "feat(mvp):" in r
+        assert "커밋하지 마라" in r
+        assert "feat(mvp):" not in r  # 더 이상 커밋 예시를 리드에게 주지 않는다
 
     def test_still_includes_freshness(self, executor):
         r = executor._build_preamble("", "")
