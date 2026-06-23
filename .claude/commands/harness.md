@@ -49,7 +49,7 @@
 - `status`: `"pending"` | `"running"` | `"completed"` | `"error"` | `"blocked"`. execute.py가 실행 중 자동으로 업데이트한다.
 - 타임스탬프(`completed_at`, `failed_at`, `blocked_at`)는 execute.py가 상태 변경 시 자동 기록한다. 생성 시 넣지 않는다.
 
-**라이브 하트비트 (실행 중 진행 상태 공개):** step은 한 번에 최대 30분까지 걸릴 수 있다. execute.py는 실행 중인 phase 항목에 **60초마다** 아래 라이브 필드를 갱신해, 사용자가 외부에서 진행 상황을 실시간으로 볼 수 있게 한다. 터미널 상태(completed/error/blocked)로 전이하면 이 필드들은 자동 제거된다.
+**라이브 하트비트 (실행 중 진행 상태 공개):** step은 한 번에 수십 분(최대 `TIMEOUT_SECONDS`=3600초)까지 걸릴 수 있다. execute.py는 실행 중인 phase 항목에 **60초마다** 아래 라이브 필드를 갱신해, 사용자가 외부에서 진행 상황을 실시간으로 볼 수 있게 한다. 터미널 상태(completed/error/blocked)로 전이하면 이 필드들은 자동 제거된다.
 
 | 필드 | 의미 |
 |------|------|
@@ -148,10 +148,20 @@ npm test        # 테스트 통과
 
 ### E. 실행
 
+**라이브 대화창으로 보기 (권장)** — 하네스는 **백그라운드**로 돌고, 팀 대화만 컬러로 터미널에 실시간 흐른다(프레임워크의 핵심, G 참조):
+
 ```bash
-python3 scripts/execute.py {task-name}        # 순차 실행
+python3 scripts/run.py {task-name}             # 하네스 백그라운드 + 라이브 컬러 대화 뷰어
+```
+
+**엔진 직접 실행 / push:**
+
+```bash
+python3 scripts/execute.py {task-name}         # 하네스만 순차 실행(자기 stdout에 대화 tail)
 python3 scripts/execute.py {task-name} --push  # 실행 후 push
 ```
+
+**여러 phase를 순차로(“n번 구동”)**: phase마다 한 번씩 실행한다(예: `run.py 0-mvp` → `run.py 1-api` …). `phases/index.json`이 전체 현황을 추적한다. (run.py/execute.py는 인자로 받은 **하나의 phase**를 끝까지 돌린다.)
 
 execute.py가 자동으로 처리하는 것:
 
@@ -209,7 +219,11 @@ execute.py가 자동으로 처리하는 것:
    - **미해결**: 내부 3회로도 안 되면 `error` + `no_retry: true` + Joy의 마지막 지시를 `error_message`에.
 6. 진행하며 팀의 한국어 대화를 `phases/{task}/chat.md`에 `[리드]/[Max]/[Joy]/[Esther]` 대화체로 실시간 append한다(코드·diff 없이). phase-level `index.json`의 `team_round`로 진행도 노출(하트비트가 top-index로 복사).
 
-**실시간 대화창 (기본값)**: `execute.py`를 돌리면 팀 대화가 채팅처럼 터미널에 실시간 표시된다(🔵 Max · 🩷 Joy · 🟡 Esther · 🧭 리드). 별도 터미널 전용 뷰어: `python3 scripts/watch.py <task>` (렌더링은 `scripts/chat_view.py` 공유).
+**실시간 대화창 (프레임워크의 핵심 — 기본값)**: 팀 대화를 터미널에 채팅처럼 실시간으로 본다 — **배경색 이름 배지**(🔵 Max · 🩷 Joy · 🟡 Esther · 🧭 리드)로 누가 말하는지 한눈에, 긴 줄은 터미널 폭에 맞춰 **줄바꿈**되어 '...' 잘림 없이 다 보인다(작은 모니터 OK).
+
+- **`python3 scripts/run.py <task>`** (권장): 하네스를 **백그라운드 자식 프로세스**로 돌리고(콘솔은 `phases/<task>/harness.log`로 숨김) **대화만** 컬러로 흘린다. 하네스가 끝나면 뷰어도 자동 종료. → "하네스는 백그라운드, 대화는 현재 터미널."
+- `python3 scripts/watch.py <task>`: 이미 (다른 곳에서) 도는 하네스에 붙는 전용 뷰어(무한 tail, Ctrl-C 종료).
+- 렌더링은 `scripts/chat_view.py` 공유(배경색 배지 + 폭 줄바꿈). 파이프로 실행해도 컬러를 유지하려면 `FORCE_COLOR=1`.
 
 **바깥 안전망**: 내부 루프가 끝나거나 세션이 죽으면(타임아웃 `TIMEOUT_SECONDS`=3600s 포함) `execute.py`가 status를 읽어 바깥 재시도·커밋·하트비트를 처리한다 → 2층 안전망.
 
