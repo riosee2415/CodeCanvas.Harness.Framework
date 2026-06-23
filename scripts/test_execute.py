@@ -1080,6 +1080,35 @@ class TestChatView:
 
 
 # ---------------------------------------------------------------------------
+# 대화창 줄바꿈 — 긴 줄은 '...' 잘림 없이 터미널 폭에 맞춰 wrap (작은 모니터 대응)
+# ---------------------------------------------------------------------------
+
+class TestChatWrap:
+    def test_long_line_wraps_not_truncates(self):
+        msg = "가" * 80
+        out = cv.render_chat_line(f"[Max] {msg}", color=False, width=40)
+        assert "\n" in out            # 여러 줄로 줄바꿈됨
+        assert "..." not in out        # 잘림 없음
+        assert out.count("가") == 80    # 전체 텍스트 보존(한 글자도 안 잘림)
+
+    def test_each_wrapped_line_within_width(self):
+        msg = "가" * 80
+        out = cv.render_chat_line(f"[Max] {msg}", color=False, width=40)
+        for ln in out.split("\n"):
+            assert cv._disp_width(ln) <= 40
+
+    def test_short_line_does_not_wrap(self):
+        out = cv.render_chat_line("[Max] 짧은 메시지", color=False, width=80)
+        assert "\n" not in out
+
+    def test_continuation_is_indented(self):
+        msg = "나" * 80
+        out = cv.render_chat_line(f"[Max] {msg}", color=False, width=40)
+        cont = out.split("\n")[1]
+        assert cont.startswith(" ")    # 이어지는 줄은 메시지 열에 맞춰 들여쓰기
+
+
+# ---------------------------------------------------------------------------
 # 대화창 색상 — FORCE_COLOR (파이프 실행 시에도 컬러 유지)
 # ---------------------------------------------------------------------------
 
@@ -1135,3 +1164,53 @@ class TestWatch:
         import watch
         monkeypatch.setattr(watch, "ROOT", tmp_path)
         assert watch._detect_running_phase() is None
+
+
+# ---------------------------------------------------------------------------
+# run.py — 하네스 백그라운드 + 라이브 컬러 뷰어 (한 방 런처)
+# ---------------------------------------------------------------------------
+
+class TestRunLauncher:
+    def test_harness_cmd_targets_execute_unbuffered(self):
+        import run as rn
+        cmd = rn._harness_cmd("0-smoke")
+        assert any("execute.py" in part for part in cmd)
+        assert cmd[-1] == "0-smoke"
+        assert "-u" in cmd  # 언버퍼드라야 tail이 실시간
+
+    def test_use_color_force_env(self, monkeypatch):
+        import run as rn
+        monkeypatch.setenv("FORCE_COLOR", "1")
+
+        class S:
+            def isatty(self):
+                return False
+        assert rn._use_color(S()) is True
+
+    def test_use_color_pipe_off(self, monkeypatch):
+        import run as rn
+        monkeypatch.delenv("FORCE_COLOR", raising=False)
+
+        class S:
+            def isatty(self):
+                return False
+        assert rn._use_color(S()) is False
+
+    def test_drain_renders_new_lines(self, tmp_path):
+        import run as rn
+        p = tmp_path / "chat.md"
+        p.write_text("[Max] 안녕\n[Joy] 통과\n", encoding="utf-8")
+        rendered, count = rn._drain(p, 0, color=False)
+        assert count == 2
+        assert any("Max" in r for r in rendered)
+        assert any("통과" in r for r in rendered)
+
+    def test_drain_incremental_only_new(self, tmp_path):
+        import run as rn
+        p = tmp_path / "chat.md"
+        p.write_text("[Max] a\n", encoding="utf-8")
+        _, count = rn._drain(p, 0, color=False)
+        p.write_text("[Max] a\n[Joy] b\n", encoding="utf-8")
+        rendered, count = rn._drain(p, count, color=False)
+        assert len(rendered) == 1
+        assert "b" in rendered[0]
