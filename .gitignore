@@ -7,3 +7,20 @@ tsconfig.tsbuildinfo
 # phase execution outputs
 phases/**/phase*-output.json
 phases/**/step*-output.json
+phases/**/harness.log
+
+# harness 동시 실행 락 (커밋 금지)
+.harness.lock
+
+# 시크릿 (절대 커밋 금지) — 하네스도 _commit_step에서 2차로 차단한다
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.pfx
+*.p12
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519

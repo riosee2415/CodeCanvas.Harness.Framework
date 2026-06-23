@@ -131,8 +131,9 @@ def read_new_lines(path, count: int):
         return [], count
     # split("\n")의 마지막 요소는 항상 '마지막 개행 이후'(완성 시 빈 문자열, 미완성 시 부분 줄)
     complete = text.split("\n")[:-1]
-    if count > len(complete):  # 파일이 교체/축소됨 -> 처음부터
-        count = 0
+    if count > len(complete):
+        # 파일이 축소/교체됨(truncate·branch swap) → 옛 줄을 재생하지 않고 현재 끝으로 resync.
+        count = len(complete)
     new = complete[count:]
     return new, count + len(new)
 

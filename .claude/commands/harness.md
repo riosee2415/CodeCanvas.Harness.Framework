@@ -124,8 +124,9 @@ watch -n5 'cat phases/index.json'   # 5초마다 전체 phase 상태 출력
 ## Acceptance Criteria
 
 ```bash
-npm run build   # 컴파일 에러 없음
-npm test        # 테스트 통과
+# 프로젝트 스택의 실제 빌드·테스트 커맨드로 교체하라 (이 예시를 그대로 쓰지 말 것).
+<build cmd>     # 예: npm run build · python -m pytest · cargo build — 빌드/컴파일 에러 0
+<test cmd>      # 예: npm test · pytest -q · go test ./... — 테스트 통과
 ```
 
 ## 검증 절차
@@ -197,12 +198,15 @@ execute.py가 자동으로 처리하는 것:
 
 1. **propose (자동, 실행 중)** — **Joy(검수자)가 핵심 주체**다: 검수 중 Max·Esther의 (반복) 실수나 새 컨벤션을 발견하면 `phases/{task-name}/rules-proposals.md`에 `- 제안: <규칙> (근거: <어떤 실수를 막는지>)`를 append해 rules.md를 fresh하게 유지한다(다른 에이전트도 가능). CLAUDE.md·rules.md를 직접 수정하지 않는다 — 사람이 병합한다.
 2. **review (자동, 시작 시)** — `execute.py`는 실행 시작 시 아래 신호를 경고로 표면화한다:
+   - 가드레일(CLAUDE.md/.claude/rules/docs)에 미작성 템플릿 플레이스홀더 `{...}` 잔존 (안 채운 채 매 step 주입되면 LLM을 오도)
    - 검토 대기 중인 `rules-proposals.md` 존재
    - `rules.md`가 `STALE_AFTER_DAYS`(기본 14일) 이상 리뷰되지 않음 (`<!-- harness:freshness last_reviewed=YYYY-MM-DD -->` 헤더 기준)
-   - 규칙/CLAUDE.md가 `package.json`에 없는 `npm run <x>`를 참조 (stale 가능)
+   - 규칙/CLAUDE.md가 `package.json`에 없는 `npm run <x>`를 참조 (stale 가능 — **Node/package.json 프로젝트 전용** 점검)
 3. **merge (수동, 사람)** — 사람이 제안을 취사선택해 `.claude/rules/rules.md`에 반영하고, 병합한 `rules-proposals.md`를 삭제한 뒤 `last_reviewed=`를 오늘 날짜로 갱신한다.
 
 규칙을 추가/수정하는 트리거(Anthropic): ① 같은 실수 2번째 ② 코드 리뷰가 에이전트가 알았어야 할 것을 잡아냄 ③ 같은 교정 재입력 ④ 새 팀원이 필요로 할 맥락. 추가만큼 **가지치기**도 중요하다 — "이 줄을 지우면 에이전트가 실수하게 되는가? 아니면 삭제."
+
+**재사용 커스터마이즈 (project-agnostic):** `.claude/settings.json`의 훅은 **스택 중립 기본값**이다 — `Stop` 훅은 no-op(`exit 0`)이니 프로젝트 빌드·테스트 체크는 `settings.local.json`에 추가하라(예: `npm run test` / `pytest -q`). `PreToolUse` Bash 가드는 흔한 파괴적 명령(`rm -rf`·`git reset --hard` 등)에 대한 **best-effort 속도방지턱일 뿐 보안 경계가 아니다**(정규식은 모든 우회를 막지 못한다) — 진짜 경계는 신뢰할 수 없는 코드를 실행하지 않는 것이다.
 
 ### G. 팀 협업 (Max·Joy·Esther)
 

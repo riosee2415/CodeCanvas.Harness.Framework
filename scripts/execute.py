@@ -11,6 +11,7 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -60,9 +61,13 @@ class StepExecutor:
     OUTER_ATTEMPTS = 2      # execute.py 바깥 재시도(초기 1 + 재시작 1) — 프로세스 실패 복구용
     TIMEOUT_SECONDS = 3600  # 한 step 세션(팀 루프 포함)의 최대 실행 시간(초)
     FEAT_MSG = "feat({phase}): step {num} — {name}"
+    WIP_MSG = "wip({phase}): step {num} FAILED — {name}"  # 실패 종료 step의 코드 — feat로 위장하지 않는다
     CHORE_MSG = "chore({phase}): step {num} output"
     TZ = timezone(timedelta(hours=9))
     STALE_AFTER_DAYS = 14  # rules.md가 이 일수 이상 리뷰되지 않으면 경고
+    VALID_STATUSES = {"pending", "running", "completed", "error", "blocked"}
+    _SAFE_PHASE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")  # git 브랜치명 안전 슬러그
+    _PLACEHOLDER_RE = re.compile(r"\{[^}\n]{1,80}\}")          # 템플릿 미작성 칸 {...}
 
     def __init__(self, phase_dir_name: str, *, auto_push: bool = False, quiet: bool = False):
         self._root = str(ROOT)
@@ -72,6 +77,8 @@ class StepExecutor:
         self._top_index_file = self._phases_dir / "index.json"
         self._auto_push = auto_push
         self._quiet = quiet  # True면 인라인 대화 표시를 끈다 (상시 chat.py가 전담)
+        self._lock_file = ROOT / ".harness.lock"
+        self._have_lock = False
 
         if not self._phase_dir.is_dir():
             print(f"ERROR: {self._phase_dir} not found")
@@ -82,20 +89,91 @@ class StepExecutor:
             print(f"ERROR: {self._index_file} not found")
             sys.exit(1)
 
-        idx = self._read_json(self._index_file)
+        idx = self._load_index_validated()
         self._project = idx.get("project", "project")
         self._phase_name = idx.get("phase", phase_dir_name)
         self._total = len(idx["steps"])
 
+    @staticmethod
+    def _preflight():
+        """claude CLI가 PATH에 있는지 부팅 시 점검한다 (복제 환경의 FileNotFoundError 방지)."""
+        if shutil.which("claude") is None:
+            print("ERROR: 'claude' CLI를 PATH에서 찾을 수 없습니다. "
+                  "Claude Code가 설치되어 있어야 하네스가 헤드리스 세션을 띄울 수 있습니다.")
+            sys.exit(1)
+
     def run(self):
-        self._print_header()
-        self._check_blockers()
-        self._check_rules_freshness()
-        self._checkout_branch()
-        guardrails = self._load_guardrails()
-        self._ensure_created_at()
-        self._execute_all_steps(guardrails)
-        self._finalize()
+        self._preflight()
+        self._acquire_lock()
+        try:
+            self._print_header()
+            self._check_blockers()
+            self._check_rules_freshness()
+            self._checkout_branch()
+            guardrails = self._load_guardrails()
+            self._ensure_created_at()
+            self._execute_all_steps(guardrails)
+            self._finalize()
+        finally:
+            self._release_lock()
+
+    # --- 동시 실행 락 (공유 워킹트리·top-index 손상 방지) ---
+
+    @staticmethod
+    def _pid_alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True   # 존재하나 다른 유저 — 살아있다고 본다
+        except OSError:
+            return False
+        return True
+
+    @staticmethod
+    def _read_lock(lock: Path) -> dict:
+        try:
+            return json.loads(lock.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _acquire_lock(self):
+        """원자적 lockfile로 동시 실행을 막는다. 살아있는 보유자가 있으면 중단,
+        죽은 프로세스가 남긴 stale lock이면 정리 후 인수한다."""
+        lock = self._lock_file
+        for _ in range(2):  # 1회는 stale 정리 후 재시도
+            try:
+                fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            except FileExistsError:
+                holder = self._read_lock(lock)
+                pid = holder.get("pid")
+                if isinstance(pid, int) and self._pid_alive(pid):
+                    self._fatal(
+                        f"다른 하네스가 이미 실행 중입니다 (pid {pid}, phase "
+                        f"'{holder.get('phase')}', {holder.get('started_at')}). "
+                        f"동시 실행은 공유 워킹트리를 손상시킵니다 — 끝나길 기다리거나, "
+                        f"죽은 프로세스라면 {lock} 를 지우세요.")
+                try:
+                    lock.unlink()   # stale → 정리 후 재시도
+                except OSError:
+                    pass
+                continue
+            else:
+                with os.fdopen(fd, "w") as f:
+                    json.dump({"pid": os.getpid(), "phase": self._phase_dir_name,
+                               "started_at": self._stamp()}, f)
+                self._have_lock = True
+                return
+        self._fatal(f"락을 획득하지 못했습니다: {lock}")
+
+    def _release_lock(self):
+        if self._have_lock:
+            try:
+                self._lock_file.unlink()
+            except OSError:
+                pass
+            self._have_lock = False
 
     # --- timestamps ---
 
@@ -111,6 +189,46 @@ class StepExecutor:
     @staticmethod
     def _write_json(p: Path, data: dict):
         p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def _fatal(self, msg: str):
+        print(f"ERROR: {msg}")
+        sys.exit(1)
+
+    def _load_index_validated(self) -> dict:
+        """index.json을 읽고 최소 스키마를 검증한다 (손편집 권장 파일 → 친절한 에러).
+
+        위반 시 raw 트레이스백 대신 어느 필드가 틀렸는지 한국어로 알리고 종료한다.
+        검증: 객체 · 비어있지 않은 steps 배열 · 각 step의 step(정수·유일)·name·status(enum) · phase 슬러그.
+        """
+        try:
+            idx = json.loads(self._index_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            self._fatal(f"{self._index_file} 가 올바른 JSON이 아닙니다: {e}")
+        if not isinstance(idx, dict):
+            self._fatal("index.json 최상위는 JSON 객체여야 합니다.")
+        steps = idx.get("steps")
+        if not isinstance(steps, list) or not steps:
+            self._fatal('index.json에 비어있지 않은 "steps" 배열이 필요합니다.')
+        seen = set()
+        for i, s in enumerate(steps):
+            if not isinstance(s, dict):
+                self._fatal(f"steps[{i}] 가 객체가 아닙니다.")
+            if not isinstance(s.get("step"), int) or isinstance(s.get("step"), bool):
+                self._fatal(f"steps[{i}].step 은 정수여야 합니다 (현재: {s.get('step')!r}).")
+            if s["step"] in seen:
+                self._fatal(f"steps 의 step 번호 {s['step']} 가 중복됩니다.")
+            seen.add(s["step"])
+            if not s.get("name"):
+                self._fatal(f"steps[{i}].name 이 필요합니다.")
+            st = s.get("status")
+            if st not in self.VALID_STATUSES:
+                self._fatal(f"steps[{i}].status '{st}' 가 유효하지 않습니다 "
+                            f"(허용: {', '.join(sorted(self.VALID_STATUSES))}).")
+        phase = idx.get("phase", self._phase_dir_name)
+        if not self._SAFE_PHASE.fullmatch(str(phase)):
+            self._fatal(f"phase 이름 '{phase}' 에 git 브랜치로 못 쓰는 문자가 있습니다 "
+                        f"(영문/숫자/._- 만 허용).")
+        return idx
 
     # --- git ---
 
@@ -141,23 +259,66 @@ class StepExecutor:
 
         print(f"  Branch: {branch}")
 
-    def _commit_step(self, step_num: int, step_name: str):
+    @staticmethod
+    def _looks_secret(path: str) -> bool:
+        """파일명이 흔한 시크릿(.env·키·인증서)으로 보이면 True (커밋 차단용)."""
+        base = path.rsplit("/", 1)[-1].lower()
+        if base.endswith((".example", ".sample", ".template", ".dist")):
+            return False
+        if base == ".env" or base.startswith(".env."):
+            return True
+        if base in ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"):
+            return True
+        if base.endswith((".pem", ".key", ".pfx", ".p12", ".keystore")):
+            return True
+        return False
+
+    def _unstage_secrets(self) -> list:
+        """스테이징된 파일 중 시크릿 의심 파일을 스테이징 해제하고 경고한다.
+
+        .gitignore가 1차 방어선이지만, 강제 추가(add -f)·미설정 다운스트림을 위한
+        2차 가드. 워킹트리에는 남기므로 의도된 파일이면 사용자가 직접 커밋할 수 있다.
+        """
+        r = self._run_git("diff", "--cached", "--name-only")
+        secrets = [f for f in r.stdout.splitlines() if f.strip() and self._looks_secret(f)]
+        for s in secrets:
+            self._run_git("reset", "HEAD", "--", s)
+        if secrets:
+            print(f"  ⚠ 시크릿 의심 파일을 커밋에서 제외합니다(스테이징 해제): {', '.join(secrets)}")
+        return secrets
+
+    def _commit_step(self, step_num: int, step_name: str, success: bool = True):
+        """코드(feat/wip)와 메타데이터(chore)를 분리 커밋한다.
+
+        success=False면 코드를 feat가 아니라 wip로 커밋한다(실패 step을 성공으로 위장 방지).
+        2층 커밋의 핵심: 코드와 메타를 **명시적 경로**로 분리해, feat 커밋이 (다운스트림 훅 등으로)
+        실패해도 그 코드가 chore에 흡수되지 않게 한다.
+        """
         output_rel = f"phases/{self._phase_dir_name}/step{step_num}-output.json"
         index_rel = f"phases/{self._phase_dir_name}/index.json"
 
+        # 1) 코드 커밋 — 메타 파일을 제외하고 스테이징
         self._run_git("add", "-A")
         self._run_git("reset", "HEAD", "--", output_rel)
         self._run_git("reset", "HEAD", "--", index_rel)
+        self._unstage_secrets()  # 시크릿 의심 파일은 커밋하지 않는다
 
         if self._run_git("diff", "--cached", "--quiet").returncode != 0:
-            msg = self.FEAT_MSG.format(phase=self._phase_name, num=step_num, name=step_name)
+            tmpl = self.FEAT_MSG if success else self.WIP_MSG
+            msg = tmpl.format(phase=self._phase_name, num=step_num, name=step_name)
             r = self._run_git("commit", "-m", msg)
             if r.returncode == 0:
                 print(f"  Commit: {msg}")
             else:
-                print(f"  WARN: 코드 커밋 실패: {r.stderr.strip()}")
+                # 코드 커밋 실패 → chore에 흡수하지 않는다. 스테이징을 해제해 워킹트리에 그대로 남기고
+                # 명확히 표면화한다(다운스트림 훅·서명 문제는 사람이 해결해야 한다).
+                print(f"  ⚠ ERROR: 코드 커밋 실패 — chore에 흡수하지 않습니다: {r.stderr.strip()}")
+                print(f"    스테이징을 해제합니다. 코드는 워킹트리에 남으니 훅·서명 문제 해결 후 직접 커밋하세요.")
+                self._run_git("reset", "HEAD")
 
-        self._run_git("add", "-A")
+        # 2) 메타데이터(chore) 커밋 — 메타 경로만 **명시적으로** 스테이징한다.
+        #    (`git add -A` 금지: 실패한 feat의 코드를 흡수하는 것을 막는다.)
+        self._run_git("add", "--", output_rel, index_rel)
         if self._run_git("diff", "--cached", "--quiet").returncode != 0:
             msg = self.CHORE_MSG.format(phase=self._phase_name, num=step_num)
             r = self._run_git("commit", "-m", msg)
@@ -347,6 +508,26 @@ class StepExecutor:
             return ""
         return "## 이전 Step 산출물\n\n" + "\n".join(lines) + "\n\n"
 
+    def _proposals_text(self) -> str:
+        """이 phase에 이미 쌓인 rules-proposals.md를 preamble에 주입한다(cross-step 인지).
+
+        헤드리스 Joy는 step마다 새로 스폰돼 직전 제안을 모른다 → 같은 제안 중복·
+        '같은 실수 2번째' 트리거 누락을 막기 위해 기존 제안을 함께 넘긴다.
+        """
+        f = self._phase_dir / "rules-proposals.md"
+        try:
+            txt = f.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+        if not txt:
+            return ""
+        return (
+            f"## 이미 제안된 규칙 (중복 방지 · cross-step)\n\n"
+            f"아래는 이 phase에서 이미 제안된 규칙이다. **같은 제안을 중복하지 말고**, "
+            f"여기 있는 실수가 또 보이면 '2번째 발생'으로 인지해 즉시 교정 지시하라:\n\n"
+            f"{txt[:1500]}\n\n---\n\n"
+        )
+
     def _build_preamble(self, guardrails: str, step_context: str,
                         prev_error: Optional[str] = None) -> str:
         d = self._phase_dir_name
@@ -361,12 +542,14 @@ class StepExecutor:
             f"## 팀 협업 프로토콜 (당신 = 팀 리드)\n\n"
             f"당신은 직접 구현하지 않는다. **Max·Esther·Joy 서브에이전트를 Task 도구로 지휘**하고 모든 대화는 "
             f"한국어로 한다. 서브에이전트에는 CLAUDE.md만 자동 로드되므로, 각 서브에이전트에게 "
-            f"\"시작 전 CLAUDE.md, .claude/rules/ 전체, 네 작업에 관련된 docs/를 **직접 읽어라**\"라고 지시한다.\n\n"
+            f"\"시작 전 CLAUDE.md, .claude/rules/ 전체, **.claude/skills/의 네 craft 스킬**"
+            f"(Max: test-driven-development·systematic-debugging, Joy: code-review, Esther: frontend-design), "
+            f"네 작업에 관련된 docs/를 **직접 읽어라**\"라고 지시한다(스킬은 페르소나 말투가 아니라 작업 규율이다).\n\n"
             f"진행 순서:\n"
             f"1. **Max**(개발)에게 이 step 구현을 지시한다.\n"
             f"2. step에 UI·디자인·프론트엔드 신호가 있으면 **Esther**(UI/UX)를 투입한다(순수 백엔드면 생략, 토큰 절약).\n"
             f"3. 해당 step의 AC(실행 커맨드)를 **직접 실행**해 결과(커맨드 + exit code)를 확보한다.\n"
-            f"4. **Joy**(검수)에게 **Max·Esther의 작업 전부(git diff)**와 위 AC 결과로 검수를 맡긴다. Joy는 보고의 **마지막 줄**에 "
+            f"4. **Joy**(검수)에게 **Max·Esther의 작업 전부(git diff)**와 위 AC 결과로 검수를 맡긴다(보안 민감 diff—인증·외부 입력·시크릿 취급—는 code-review 스킬 기준으로 특히 꼼꼼히 본다). Joy는 보고의 **마지막 줄**에 "
             f"정확히 하나의 센티넬을 찍는다: `VERDICT: PASS` 또는 `VERDICT: IMPROVE`. (Joy는 발견한 반복 실수를 규칙으로 제안하는 임무도 갖는다 — 작업규칙 참조.)\n"
             f"5. 당신은 **그 마지막 센티넬 줄만** 파싱해 루프를 제어한다.\n"
             f"   - `VERDICT: IMPROVE` → Joy의 `개선지시(→Max)` 불릿을 Max에게 전달해 수정 → Joy 재검수. 내부 최대 **{r}회**.\n"
@@ -394,7 +577,7 @@ class StepExecutor:
         return (
             f"당신은 {self._project} 프로젝트의 **팀 리드**입니다. 아래 step을 팀으로 수행하세요.\n\n"
             f"{guardrails}\n\n---\n\n"
-            f"{step_context}{retry_section}"
+            f"{step_context}{self._proposals_text()}{retry_section}"
             f"{team_protocol}"
             f"## 작업 규칙\n\n"
             f"1. 이전 step에서 작성된 코드를 확인하고 일관성을 유지하라.\n"
@@ -415,6 +598,29 @@ class StepExecutor:
         )
 
     # --- Claude 호출 ---
+
+    @staticmethod
+    def _result_detail(stdout: str) -> str:
+        """claude `--output-format json` 봉투에서 사람이 읽을 실패/결과 요약을 뽑는다.
+
+        파싱 실패면 빈 문자열을 반환한다(호출부가 raw stderr로 폴백). 재시도 모델에
+        exit 코드만이 아니라 실제 실패 내용(subtype·result)을 피드백하기 위함이다.
+        """
+        try:
+            env = json.loads(stdout)
+        except (json.JSONDecodeError, TypeError):
+            return ""
+        if not isinstance(env, dict):
+            return ""
+        parts = []
+        if env.get("subtype"):
+            parts.append(f"subtype={env['subtype']}")
+        if env.get("is_error"):
+            parts.append("is_error=true")
+        res = env.get("result") or env.get("error")
+        if isinstance(res, str) and res.strip():
+            parts.append(res.strip()[:800])
+        return "; ".join(parts)
 
     def _invoke_claude(self, step: dict, preamble: str) -> dict:
         step_num, step_name = step["step"], step["name"]
@@ -447,6 +653,7 @@ class StepExecutor:
         output = {
             "step": step_num, "name": step_name,
             "exitCode": returncode,
+            "detail": self._result_detail(stdout),
             "stdout": stdout, "stderr": stderr,
         }
         out_path = self._phase_dir / f"step{step_num}-output.json"
@@ -491,21 +698,57 @@ class StepExecutor:
 
     # --- 규칙 신선도(rules freshness) ---
 
+    def _unfilled_placeholders(self) -> list:
+        """가드레일 소스(CLAUDE.md/rules/docs)에 남은 미작성 템플릿 칸을 찾는다.
+
+        템플릿은 {프로젝트명}·{예: ...} 같은 한글 플레이스홀더를 쓴다. 실제 코드의
+        중괄호 오탐을 줄이려고, 중괄호 안에 한글이나 '예:'가 있는 것만 플레이스홀더로 본다.
+        """
+        sources = [ROOT / "CLAUDE.md", *self._rules_files()]
+        docs_dir = ROOT / "docs"
+        if docs_dir.is_dir():
+            sources += sorted(docs_dir.glob("*.md"))
+        found = set()
+        for src in sources:
+            try:
+                text = src.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for m in self._PLACEHOLDER_RE.findall(text):
+                inner = m[1:-1]
+                if re.search(r"[가-힣]", inner) or inner.strip().startswith("예:"):
+                    found.add(m.strip())
+        return sorted(found)
+
     def _check_rules_freshness(self):
-        """rules.md를 fresh하게 유지하기 위한 결정적(비-LLM) 점검.
+        """가드레일을 fresh하게 유지하기 위한 결정적(비-LLM) 점검.
 
         근거: 사람이 큐레이션한 규칙만 성과를 높인다(ETH arXiv 2602.11988).
-        따라서 자동으로 규칙을 덮어쓰지 않고, 신선도 신호만 표면화해 사람의
-        검토를 유도한다. 세 가지 신호를 경고로 출력한다:
+        자동으로 덮어쓰지 않고 신선도 신호만 표면화해 사람의 검토를 유도한다:
+          0) 미작성 템플릿 플레이스홀더({...}) — 채우지 않은 채 주입되면 LLM을 오도
           1) 검토 대기 중인 규칙 제안(rules-proposals.md)
           2) rules.md가 STALE_AFTER_DAYS 이상 리뷰되지 않음
-          3) 규칙/CLAUDE.md가 package.json에 없는 npm 스크립트를 참조 (stale 가능)
+          3) 규칙/CLAUDE.md가 정의되지 않은 빌드/테스트 커맨드를 참조 (stale 가능)
         """
+        warnings = []
+
+        placeholders = self._unfilled_placeholders()
+        if placeholders:
+            sample = ", ".join(placeholders[:5])
+            more = " …" if len(placeholders) > 5 else ""
+            warnings.append(
+                f"가드레일에 미작성 템플릿 플레이스홀더가 {len(placeholders)}개 남아 있습니다: {sample}{more}\n"
+                f"      → CLAUDE.md/.claude/rules/docs의 {{...}}를 실제 값으로 채우세요 "
+                f"(미작성 컨텍스트가 매 step 주입되어 LLM을 오도합니다)."
+            )
+
         rules_files = self._rules_files()
         if not rules_files:
+            if warnings:
+                print(f"\n  [rules freshness]")
+                for w in warnings:
+                    print(f"  ⚠ {w}")
             return
-
-        warnings = []
 
         proposals = sorted(self._phases_dir.glob("*/rules-proposals.md"))
         if proposals:
@@ -608,8 +851,10 @@ class StepExecutor:
             err_msg = step_obj.get("error_message", "Step did not update status")
             # 실제 실패 신호(exit code + stderr 꼬리)를 주입해 다음 시도/최종 에러를 구체화한다.
             if out.get("exitCode", 0) != 0 or err_msg == "Step did not update status":
+                detail = out.get("detail") or ""
                 stderr_tail = (out.get("stderr") or "")[-1500:]
-                err_msg = f"{err_msg} [exit {out.get('exitCode')}; stderr tail: {stderr_tail}]"
+                detail_part = f"; {detail}" if detail else ""
+                err_msg = f"{err_msg} [exit {out.get('exitCode')}{detail_part}; stderr tail: {stderr_tail}]"
 
             no_retry = bool(step_obj.get("no_retry", False))
             is_last = attempt >= self.OUTER_ATTEMPTS
@@ -619,7 +864,7 @@ class StepExecutor:
                 step_obj["error_message"] = f"[{attempt}회 시도 후 실패] {err_msg}"
                 step_obj["failed_at"] = ts
                 self._write_json(self._index_file, index)
-                self._commit_step(step_num, step_name)
+                self._commit_step(step_num, step_name, success=False)
                 why = " (no_retry: 내부 루프 미해결)" if no_retry and not is_last else ""
                 print(f"  ✗ Step {step_num}: {step_name} failed{why} [{elapsed}s]")
                 print(f"    Error: {err_msg}")

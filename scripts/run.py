@@ -36,6 +36,12 @@ def _harness_cmd(phase: str) -> list:
     return [sys.executable, "-u", str(SCRIPTS / "execute.py"), phase]
 
 
+def _spawn_kwargs() -> dict:
+    """하네스 자식을 새 세션으로 분리(detach)한다 — 뷰어(부모)가 SIGHUP으로 죽어도
+    하네스는 살아남아 step 경계까지 진행한다. 사용자는 watch.py/chat.py로 재접속 가능."""
+    return {"start_new_session": True}
+
+
 def _drain(path, count: int, color: bool):
     """chat.md의 새 줄을 읽어 (렌더된 줄 리스트, 갱신된 count)를 반환한다."""
     raw, count = chat_view.read_new_lines(str(path), count)
@@ -79,7 +85,8 @@ def main():
     # 1) 하네스를 백그라운드 자식 프로세스로 — 콘솔은 로그 파일로 숨긴다.
     with open(log, "w", encoding="utf-8") as logf:
         proc = subprocess.Popen(_harness_cmd(phase), cwd=str(ROOT),
-                                stdout=logf, stderr=subprocess.STDOUT)
+                                stdout=logf, stderr=subprocess.STDOUT,
+                                **_spawn_kwargs())
         _banner(phase, color)
 
         # 2) chat.md를 tail → 실시간 컬러 렌더. 하네스가 끝나면 종료.

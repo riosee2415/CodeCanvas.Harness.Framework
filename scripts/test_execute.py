@@ -469,11 +469,13 @@ class TestCommitStep:
         calls = []
         def fake_git(*args):
             calls.append(args)
-            if args[:2] == ("diff", "--cached"):
+            if args[:3] == ("diff", "--cached", "--name-only"):
+                return MagicMock(returncode=0, stdout="", stderr="")  # 시크릿 스캔 (코드 변경 무관)
+            if args[:3] == ("diff", "--cached", "--quiet"):
                 call_count["diff"] += 1
                 if call_count["diff"] == 1:
-                    return MagicMock(returncode=0)
-                return MagicMock(returncode=1)
+                    return MagicMock(returncode=0)  # 코드 변경 없음 → feat 스킵
+                return MagicMock(returncode=1)      # 메타 변경 있음 → chore
             return MagicMock(returncode=0, stdout="", stderr="")
         executor._run_git = fake_git
 
@@ -482,6 +484,114 @@ class TestCommitStep:
         commit_msgs = [c[2] for c in calls if c[0] == "commit"]
         assert len(commit_msgs) == 1
         assert "chore" in commit_msgs[0]
+
+
+class TestCommitStepIntegration:
+    """실제 임시 git repo에서 _commit_step을 돌려 커밋 무결성을 검증한다 (#1, #5).
+
+    fake_git 단위테스트가 못 잡는 회귀(메타 흡수·실패 step 오라벨)를 실제 git으로 잠근다.
+    """
+
+    def _git(self, repo, *args):
+        return subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True)
+
+    def _init_repo(self, tmp_path):
+        self._git(tmp_path, "init", "-q")
+        self._git(tmp_path, "config", "user.email", "t@example.com")
+        self._git(tmp_path, "config", "user.name", "t")
+        self._git(tmp_path, "config", "commit.gpgsign", "false")
+        self._git(tmp_path, "commit", "-q", "--allow-empty", "-m", "init")
+        d = tmp_path / "phases" / "0-x"
+        d.mkdir(parents=True)
+        (d / "index.json").write_text(
+            json.dumps({"project": "P", "phase": "x",
+                        "steps": [{"step": 0, "name": "core", "status": "completed", "summary": "s"}]}),
+            encoding="utf-8")
+        return tmp_path, d
+
+    def _executor(self, repo):
+        with patch.object(ex, "ROOT", repo):
+            inst = ex.StepExecutor("0-x")
+        inst._root = str(repo)
+        inst._phases_dir = repo / "phases"
+        inst._phase_dir = repo / "phases" / "0-x"
+        inst._phase_dir_name = "0-x"
+        inst._phase_name = "x"
+        inst._index_file = repo / "phases" / "0-x" / "index.json"
+        return inst
+
+    def _commit_files(self, repo, subj_substr):
+        r = self._git(repo, "log", "--format=%H\t%s")
+        for line in r.stdout.strip().splitlines():
+            h, _, subj = line.partition("\t")
+            if subj_substr in subj:
+                files = self._git(repo, "show", "--name-only", "--format=", h).stdout.strip().splitlines()
+                return [f for f in files if f]
+        return None
+
+    def _porcelain(self, repo):
+        return self._git(repo, "status", "--porcelain").stdout.strip()
+
+    def test_success_feat_has_code_chore_has_meta(self, tmp_path):
+        repo, d = self._init_repo(tmp_path)
+        (repo / "smoke.py").write_text("x = 1\n", encoding="utf-8")
+        (d / "step0-output.json").write_text("{}", encoding="utf-8")
+        self._executor(repo)._commit_step(0, "core", success=True)
+
+        feat = self._commit_files(repo, "feat(x): step 0")
+        assert feat is not None and "smoke.py" in feat
+        assert "phases/0-x/index.json" not in feat       # 메타는 feat에 안 들어간다
+        chore = self._commit_files(repo, "chore(x): step 0")
+        assert chore is not None and "phases/0-x/index.json" in chore
+        assert self._porcelain(repo) == ""               # 트리 clean
+
+    def test_feat_failure_does_not_absorb_code_into_chore(self, tmp_path):
+        repo, d = self._init_repo(tmp_path)
+        # feat/wip 메시지 커밋만 거부하는 commit-msg 훅 (chore는 통과)
+        hook = repo / ".git" / "hooks" / "commit-msg"
+        hook.write_text('#!/bin/sh\ngrep -qE "^(feat|wip)" "$1" && exit 1\nexit 0\n', encoding="utf-8")
+        hook.chmod(0o755)
+        (repo / "smoke.py").write_text("x = 1\n", encoding="utf-8")
+        (d / "step0-output.json").write_text("{}", encoding="utf-8")
+        self._executor(repo)._commit_step(0, "core", success=True)
+
+        chore = self._commit_files(repo, "chore(x): step 0")
+        assert chore is None or "smoke.py" not in chore   # 코드가 chore에 흡수되면 안 됨
+        assert "smoke.py" in self._porcelain(repo)        # 코드는 워킹트리에 남는다
+
+    def test_failed_step_uses_wip_not_feat(self, tmp_path):
+        repo, d = self._init_repo(tmp_path)
+        (repo / "broken.py").write_text("def f(\n", encoding="utf-8")
+        (d / "step0-output.json").write_text("{}", encoding="utf-8")
+        self._executor(repo)._commit_step(0, "core", success=False)
+
+        subjects = self._git(repo, "log", "--format=%s").stdout
+        assert "wip(x): step 0" in subjects
+        assert "feat(x): step 0" not in subjects
+
+    def test_secret_files_not_committed(self, tmp_path):
+        repo, d = self._init_repo(tmp_path)
+        (repo / "app.py").write_text("x = 1\n", encoding="utf-8")
+        (repo / ".env").write_text("SECRET=abc\n", encoding="utf-8")
+        (d / "step0-output.json").write_text("{}", encoding="utf-8")
+        self._executor(repo)._commit_step(0, "core", success=True)
+
+        feat = self._commit_files(repo, "feat(x): step 0")
+        assert feat is not None and "app.py" in feat
+        assert ".env" not in feat                      # 시크릿은 커밋되지 않는다
+        assert ".env" in self._porcelain(repo)         # 워킹트리에 남는다(미커밋)
+
+
+class TestSecretGuard:
+    def test_looks_secret_true(self):
+        for p in [".env", ".env.local", "dir/.env.production",
+                  "id_rsa", "certs/server.pem", "app.key", "store.p12"]:
+            assert ex.StepExecutor._looks_secret(p) is True, p
+
+    def test_looks_secret_false(self):
+        for p in ["main.py", "README.md", ".env.example", ".env.sample",
+                  "config.json", "styles.css"]:
+            assert ex.StepExecutor._looks_secret(p) is False, p
 
 
 # ---------------------------------------------------------------------------
@@ -1422,3 +1532,251 @@ class TestQuietMode:
         monkeypatch.setattr(sys, "argv", ["execute.py", "0-mvp"])
         ex.main()
         assert captured["quiet"] is False
+
+
+# ---------------------------------------------------------------------------
+# index.json 입력 검증 + phase 정규화 (#9, #13) — 손편집 권장 파일을 기동 시 검증
+# ---------------------------------------------------------------------------
+
+class TestIndexValidation:
+    def _construct(self, tmp_project, index):
+        d = tmp_project / "phases" / "0-mvp"
+        d.mkdir(parents=True, exist_ok=True)
+        content = index if isinstance(index, str) else json.dumps(index)
+        (d / "index.json").write_text(content, encoding="utf-8")
+        with patch.object(ex, "ROOT", tmp_project):
+            return ex.StepExecutor("0-mvp")
+
+    def test_valid_index_ok(self, tmp_project):
+        inst = self._construct(tmp_project, {"phase": "mvp",
+                "steps": [{"step": 0, "name": "a", "status": "pending"}]})
+        assert inst._total == 1
+
+    def test_malformed_json_exits(self, tmp_project):
+        with pytest.raises(SystemExit):
+            self._construct(tmp_project, "{not valid json")
+
+    def test_missing_steps_exits(self, tmp_project):
+        with pytest.raises(SystemExit):
+            self._construct(tmp_project, {"phase": "mvp"})
+
+    def test_empty_steps_exits(self, tmp_project):
+        with pytest.raises(SystemExit):
+            self._construct(tmp_project, {"phase": "mvp", "steps": []})
+
+    def test_duplicate_step_num_exits(self, tmp_project):
+        with pytest.raises(SystemExit):
+            self._construct(tmp_project, {"phase": "mvp", "steps": [
+                {"step": 0, "name": "a", "status": "pending"},
+                {"step": 0, "name": "b", "status": "pending"}]})
+
+    def test_invalid_status_exits(self, tmp_project):
+        with pytest.raises(SystemExit):
+            self._construct(tmp_project, {"phase": "mvp",
+                "steps": [{"step": 0, "name": "a", "status": "done"}]})
+
+    def test_step_not_int_exits(self, tmp_project):
+        with pytest.raises(SystemExit):
+            self._construct(tmp_project, {"phase": "mvp",
+                "steps": [{"step": "0", "name": "a", "status": "pending"}]})
+
+    def test_unsafe_phase_name_exits(self, tmp_project):
+        with pytest.raises(SystemExit):
+            self._construct(tmp_project, {"phase": "bad name!",
+                "steps": [{"step": 0, "name": "a", "status": "pending"}]})
+
+
+# ---------------------------------------------------------------------------
+# 동시 실행 락 (#2) — 공유 워킹트리 손상 방지
+# ---------------------------------------------------------------------------
+
+class TestConcurrencyLock:
+    def _exec(self, tmp_project):
+        d = tmp_project / "phases" / "0-mvp"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "index.json").write_text(json.dumps(
+            {"phase": "mvp", "steps": [{"step": 0, "name": "a", "status": "pending"}]}))
+        with patch.object(ex, "ROOT", tmp_project):
+            return ex.StepExecutor("0-mvp")
+
+    def test_pid_alive_self(self):
+        assert ex.StepExecutor._pid_alive(os.getpid()) is True
+
+    def test_pid_alive_dead(self):
+        assert ex.StepExecutor._pid_alive(2 ** 31 - 1) is False
+
+    def test_acquire_creates_and_release_removes(self, tmp_project):
+        inst = self._exec(tmp_project)
+        inst._acquire_lock()
+        assert (tmp_project / ".harness.lock").exists()
+        inst._release_lock()
+        assert not (tmp_project / ".harness.lock").exists()
+
+    def test_second_acquire_blocks_when_holder_alive(self, tmp_project):
+        inst1 = self._exec(tmp_project)
+        inst2 = self._exec(tmp_project)
+        inst1._acquire_lock()
+        try:
+            with pytest.raises(SystemExit):
+                inst2._acquire_lock()  # 살아있는 보유자(이 프로세스) → 차단
+        finally:
+            inst1._release_lock()
+
+    def test_stale_lock_taken_over(self, tmp_project):
+        (tmp_project / ".harness.lock").write_text(json.dumps(
+            {"pid": 2 ** 31 - 1, "phase": "x", "started_at": "t"}))
+        inst = self._exec(tmp_project)
+        inst._acquire_lock()  # 죽은 pid → stale → takeover (예외 없음)
+        holder = json.loads((tmp_project / ".harness.lock").read_text())
+        assert holder["pid"] == os.getpid()
+        inst._release_lock()
+
+
+# ---------------------------------------------------------------------------
+# 관측성·CLI preflight·detach (#12)
+# ---------------------------------------------------------------------------
+
+class TestObservability:
+    def test_result_detail_parses_error(self):
+        env = json.dumps({"type": "result", "subtype": "error_max_turns",
+                          "is_error": True, "result": "turn limit reached"})
+        d = ex.StepExecutor._result_detail(env)
+        assert "error_max_turns" in d and "turn limit reached" in d
+
+    def test_result_detail_parses_success_result(self):
+        env = json.dumps({"subtype": "success", "is_error": False, "result": "done ok"})
+        d = ex.StepExecutor._result_detail(env)
+        assert "done ok" in d
+
+    def test_result_detail_non_json_empty(self):
+        assert ex.StepExecutor._result_detail("not json at all") == ""
+        assert ex.StepExecutor._result_detail("") == ""
+
+    def test_preflight_missing_exits(self, monkeypatch):
+        monkeypatch.setattr(ex.shutil, "which", lambda c: None)
+        with pytest.raises(SystemExit):
+            ex.StepExecutor._preflight()
+
+    def test_preflight_present_ok(self, monkeypatch):
+        monkeypatch.setattr(ex.shutil, "which", lambda c: "/usr/bin/claude")
+        ex.StepExecutor._preflight()  # 예외 없음
+
+
+class TestRunDetach:
+    def test_spawn_kwargs_detaches(self):
+        import run as rn
+        assert rn._spawn_kwargs().get("start_new_session") is True
+
+
+# ---------------------------------------------------------------------------
+# 스킬 배선 + cross-step 규칙 제안 (#6, #11)
+# ---------------------------------------------------------------------------
+
+class TestSkillWiringAndProposals:
+    def test_preamble_points_to_skills(self, executor):
+        p = executor._build_preamble("GR", "", None)
+        assert ".claude/skills/" in p   # preamble이 스킬을 명시 (페르소나 prose에만 의존하지 않음)
+
+    def test_preamble_includes_prior_proposals(self, executor, phase_dir):
+        (phase_dir / "rules-proposals.md").write_text(
+            "- 제안: 항상 ABC (근거: DEF)\n", encoding="utf-8")
+        p = executor._build_preamble("GR", "", None)
+        assert "항상 ABC" in p           # Joy가 직전 제안을 보고 중복/2번째 발생 인지
+
+    def test_preamble_no_proposals_section_when_absent(self, executor):
+        p = executor._build_preamble("GR", "", None)
+        assert "이미 제안된 규칙" not in p
+
+
+# ---------------------------------------------------------------------------
+# 미작성 플레이스홀더 가드 (#4)
+# ---------------------------------------------------------------------------
+
+class TestPlaceholderGuard:
+    def test_finds_korean_placeholders(self, executor, tmp_project):
+        (tmp_project / "CLAUDE.md").write_text("# 프로젝트: {프로젝트명}\n개요: {한두 문장}\n", encoding="utf-8")
+        with patch.object(ex, "ROOT", tmp_project):
+            ph = executor._unfilled_placeholders()
+        assert any("프로젝트명" in p for p in ph)
+
+    def test_ignores_code_braces(self, executor, tmp_project):
+        (tmp_project / "CLAUDE.md").write_text('cfg = { "key": 1 }\nfn() { return 0; }\n', encoding="utf-8")
+        with patch.object(ex, "ROOT", tmp_project):
+            ph = executor._unfilled_placeholders()
+        assert ph == []
+
+    def test_filled_has_no_placeholders(self, executor, tmp_project):
+        (tmp_project / "CLAUDE.md").write_text("# 프로젝트: MyApp\n개요: 실시간 채팅 앱.\n", encoding="utf-8")
+        with patch.object(ex, "ROOT", tmp_project):
+            ph = executor._unfilled_placeholders()
+        assert ph == []
+
+
+# ---------------------------------------------------------------------------
+# 뷰어 정확성 (#10) — chat.md 회전 + watch.py 하트비트 신선도
+# ---------------------------------------------------------------------------
+
+class TestViewerAccuracy:
+    def test_read_new_lines_shrink_resyncs_no_replay(self, tmp_path):
+        p = tmp_path / "c.md"
+        p.write_text("a\nb\nc\nd\n", encoding="utf-8")
+        _, count = cv.read_new_lines(str(p), 0)
+        assert count == 4
+        p.write_text("x\n", encoding="utf-8")          # truncate → 1줄
+        new, count2 = cv.read_new_lines(str(p), count)
+        assert new == []                                # 옛 줄 재생 안 함
+        assert count2 == 1                              # 새 끝으로 resync
+        p.write_text("x\ny\n", encoding="utf-8")        # 이후 append
+        new3, _ = cv.read_new_lines(str(p), count2)
+        assert new3 == ["y"]                            # append는 정상 표시
+
+    def _write_top(self, tmp_path, phases):
+        (tmp_path / "phases").mkdir(exist_ok=True)
+        (tmp_path / "phases" / "index.json").write_text(
+            json.dumps({"phases": phases}), encoding="utf-8")
+
+    def test_fresh_running_returned(self, tmp_path, monkeypatch):
+        import watch
+        self._write_top(tmp_path, [
+            {"dir": "1-b", "status": "running", "heartbeat_at": "2020-01-01T00:00:30+0900"}])
+        monkeypatch.setattr(watch, "ROOT", tmp_path)
+        now = datetime(2020, 1, 1, 0, 1, 0, tzinfo=timezone(timedelta(hours=9)))  # +30s
+        assert watch._detect_running_phase(now=now) == "1-b"
+
+    def test_stale_running_falls_back_to_freshest_chat(self, tmp_path, monkeypatch):
+        import watch
+        self._write_top(tmp_path, [
+            {"dir": "0-a", "status": "completed"},
+            {"dir": "1-b", "status": "running", "heartbeat_at": "2020-01-01T00:00:00+0900"}])
+        (tmp_path / "phases" / "0-a").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "phases" / "0-a" / "chat.md").write_text("x", encoding="utf-8")
+        monkeypatch.setattr(watch, "ROOT", tmp_path)
+        now = datetime(2020, 1, 1, 1, 0, 0, tzinfo=timezone(timedelta(hours=9)))  # +1h → stale
+        assert watch._detect_running_phase(now=now) == "0-a"
+
+    def test_no_heartbeat_trusts_status(self, tmp_path, monkeypatch):
+        import watch
+        self._write_top(tmp_path, [
+            {"dir": "0-a", "status": "completed"},
+            {"dir": "1-b", "status": "running"}])  # 하트비트 없음 → status 신뢰 (backward compat)
+        monkeypatch.setattr(watch, "ROOT", tmp_path)
+        assert watch._detect_running_phase() == "1-b"
+
+
+# ---------------------------------------------------------------------------
+# settings.json 훅 — 스택 중립 Stop · 보강된 Bash 가드 (#7, #8)
+# ---------------------------------------------------------------------------
+
+class TestSettingsHooks:
+    def _settings(self):
+        return json.loads((ex.ROOT / ".claude" / "settings.json").read_text(encoding="utf-8"))
+
+    def test_stop_hook_is_stack_neutral(self):
+        cmd = self._settings()["hooks"]["Stop"][0]["hooks"][0]["command"]
+        assert "npm" not in cmd  # 기본 no-op(스택 중립), npm 하드코딩 제거
+
+    def test_bash_guard_broadened_and_no_false_positive(self):
+        cmd = self._settings()["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        assert "--recursive" in cmd          # rm 변형까지 broaden
+        assert "delete" in cmd               # find ... -delete
+        assert "with-lease" not in cmd       # --force-with-lease 오탐 차단(명시 제외 안 함)
