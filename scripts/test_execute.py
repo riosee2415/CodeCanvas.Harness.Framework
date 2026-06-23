@@ -968,6 +968,11 @@ class TestAgentDefinitions:
             assert "페르소나" in text, f"{name}.md에 페르소나 섹션이 없음"
             assert f"[{name.capitalize()}]" in text, f"{name}.md에 자기 대화 태그 예시가 없음"
 
+    def test_joy_is_rules_guardian(self):
+        text = (self.AGENTS_DIR / "joy.md").read_text(encoding="utf-8")
+        assert "규칙 수호자" in text
+        assert "rules-proposals" in text
+
 
 # ---------------------------------------------------------------------------
 # 팀 대화창 — chat_view 렌더링/팔로우

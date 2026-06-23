@@ -178,7 +178,7 @@ execute.py가 자동으로 처리하는 것:
 
 루프 (propose → review → merge):
 
-1. **propose (자동, 실행 중)** — 각 step 에이전트는 새 컨벤션/결정을 확립하거나 기존 규칙이 코드와 어긋남을 발견하면 `phases/{task-name}/rules-proposals.md`에 `- 제안: <규칙> (근거: <왜>)`를 append한다. CLAUDE.md·rules.md를 직접 수정하지 않는다.
+1. **propose (자동, 실행 중)** — **Joy(검수자)가 핵심 주체**다: 검수 중 Max·Esther의 (반복) 실수나 새 컨벤션을 발견하면 `phases/{task-name}/rules-proposals.md`에 `- 제안: <규칙> (근거: <어떤 실수를 막는지>)`를 append해 rules.md를 fresh하게 유지한다(다른 에이전트도 가능). CLAUDE.md·rules.md를 직접 수정하지 않는다 — 사람이 병합한다.
 2. **review (자동, 시작 시)** — `execute.py`는 실행 시작 시 아래 신호를 경고로 표면화한다:
    - 검토 대기 중인 `rules-proposals.md` 존재
    - `rules.md`가 `STALE_AFTER_DAYS`(기본 14일) 이상 리뷰되지 않음 (`<!-- harness:freshness last_reviewed=YYYY-MM-DD -->` 헤더 기준)
@@ -194,7 +194,7 @@ execute.py가 자동으로 처리하는 것:
 | 에이전트 | 역할 | 모델·색 |
 |---|---|---|
 | **Max** | 개발/엔지니어 — 구현·TDD | opus-4-8 · 🔵 |
-| **Joy** | 검수자 — git diff + AC 재실행으로 통과/개선 판정 | opus-4-8 · 🩷 |
+| **Joy** | 검수자 + **규칙 수호자** — git diff+AC로 통과/개선 판정, 반복 실수를 규칙으로 제안(F) | opus-4-8 · 🩷 |
 | **Esther** | UI/UX — 디자인·프론트엔드 (UI step만 투입) | opus-4-8 · 🟡 |
 
 루프 (팀 리드가 `execute.py` preamble의 "팀 협업 프로토콜"에 따라 수행):
