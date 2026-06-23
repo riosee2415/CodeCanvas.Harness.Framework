@@ -16,6 +16,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 import execute as ex
+import chat_view as cv
 
 
 # ---------------------------------------------------------------------------
@@ -736,9 +737,15 @@ class TestTeamPreamble:
         r = executor._build_preamble("", "")
         assert str(ex.StepExecutor.INNER_ROUNDS) in r
 
-    def test_references_dialogue_ledger(self, executor):
+    def test_references_live_chat(self, executor):
         r = executor._build_preamble("", "")
-        assert "dialogue" in r
+        assert "chat.md" in r
+
+    def test_chat_uses_speaker_prefixes(self, executor):
+        r = executor._build_preamble("", "")
+        assert "[Max]" in r
+        assert "[Joy]" in r
+        assert "실시간" in r
 
     def test_includes_no_retry_protocol(self, executor):
         r = executor._build_preamble("", "")
@@ -954,3 +961,127 @@ class TestAgentDefinitions:
     def test_esther_references_ui_guide(self):
         text = (self.AGENTS_DIR / "esther.md").read_text(encoding="utf-8")
         assert "UI_GUIDE" in text
+
+    def test_each_has_persona_and_self_chat_tag(self):
+        for name in ("max", "joy", "esther"):
+            text = (self.AGENTS_DIR / f"{name}.md").read_text(encoding="utf-8")
+            assert "페르소나" in text, f"{name}.md에 페르소나 섹션이 없음"
+            assert f"[{name.capitalize()}]" in text, f"{name}.md에 자기 대화 태그 예시가 없음"
+
+
+# ---------------------------------------------------------------------------
+# 팀 대화창 — chat_view 렌더링/팔로우
+# ---------------------------------------------------------------------------
+
+class TestChatView:
+    def test_render_known_speaker_plain(self):
+        out = cv.render_chat_line("[Max] adder 만들었어요", color=False)
+        assert "Max" in out
+        assert "adder 만들었어요" in out
+        assert "│" in out
+
+    def test_render_joy_and_lead(self):
+        assert "Joy" in cv.render_chat_line("[Joy] 통과입니다", color=False)
+        assert "리드" in cv.render_chat_line("[리드] 시작합니다", color=False)
+
+    def test_render_strips_colon_after_bracket(self):
+        out = cv.render_chat_line("[Max]: 안녕", color=False)
+        assert "안녕" in out
+        assert "│ : " not in out  # 선행 콜론 제거됨
+
+    def test_render_color_adds_ansi(self):
+        assert "\033[" in cv.render_chat_line("[Max] hi", color=True)
+
+    def test_render_no_color_has_no_ansi(self):
+        assert "\033[" not in cv.render_chat_line("[Max] hi", color=False)
+
+    def test_render_unknown_speaker_keeps_text(self):
+        assert "Bob" in cv.render_chat_line("[Bob] hi", color=False)
+
+    def test_render_separator(self):
+        assert "Step 0" in cv.render_chat_line("=== Step 0: adder ===", color=False)
+
+    def test_render_empty_is_blank(self):
+        assert cv.render_chat_line("   ", color=False) == ""
+
+    def test_read_new_lines_basic(self, tmp_path):
+        p = tmp_path / "chat.md"
+        p.write_text("a\nb\n", encoding="utf-8")
+        lines, count = cv.read_new_lines(str(p), 0)
+        assert lines == ["a", "b"]
+        assert count == 2
+
+    def test_read_new_lines_incremental(self, tmp_path):
+        p = tmp_path / "chat.md"
+        p.write_text("a\nb\n", encoding="utf-8")
+        _, count = cv.read_new_lines(str(p), 0)
+        p.write_text("a\nb\nc\n", encoding="utf-8")
+        lines, count = cv.read_new_lines(str(p), count)
+        assert lines == ["c"]
+        assert count == 3
+
+    def test_read_new_lines_excludes_partial(self, tmp_path):
+        p = tmp_path / "chat.md"
+        p.write_text("a\nb", encoding="utf-8")  # b는 미완성(개행 없음)
+        lines, count = cv.read_new_lines(str(p), 0)
+        assert lines == ["a"]
+        assert count == 1
+
+    def test_read_new_lines_missing_file(self, tmp_path):
+        lines, count = cv.read_new_lines(str(tmp_path / "nope.md"), 5)
+        assert lines == []
+        assert count == 5
+
+    def test_follow_emits_new_lines_then_stops(self, tmp_path):
+        import threading
+        import time
+        p = tmp_path / "chat.md"
+        p.write_text("[Max] hi\n", encoding="utf-8")
+        got = []
+        stop = threading.Event()
+        th = threading.Thread(target=cv.follow,
+                              args=(str(p), stop, got.append),
+                              kwargs={"interval": 0.02})
+        th.start()
+        time.sleep(0.1)
+        with open(p, "a", encoding="utf-8") as f:
+            f.write("[Joy] 통과\n")
+        time.sleep(0.1)
+        stop.set()
+        th.join()
+        assert "[Max] hi" in got
+        assert "[Joy] 통과" in got
+
+
+# ---------------------------------------------------------------------------
+# 팀 대화창 — watch.py phase 자동 감지
+# ---------------------------------------------------------------------------
+
+class TestWatch:
+    def _write_top(self, tmp_path, phases):
+        (tmp_path / "phases").mkdir(exist_ok=True)
+        (tmp_path / "phases" / "index.json").write_text(
+            json.dumps({"phases": phases}), encoding="utf-8")
+
+    def test_detect_running_phase(self, tmp_path, monkeypatch):
+        import watch
+        self._write_top(tmp_path, [
+            {"dir": "0-a", "status": "completed"},
+            {"dir": "1-b", "status": "running"},
+        ])
+        monkeypatch.setattr(watch, "ROOT", tmp_path)
+        assert watch._detect_running_phase() == "1-b"
+
+    def test_detect_falls_back_to_last(self, tmp_path, monkeypatch):
+        import watch
+        self._write_top(tmp_path, [
+            {"dir": "0-a", "status": "completed"},
+            {"dir": "1-b", "status": "pending"},
+        ])
+        monkeypatch.setattr(watch, "ROOT", tmp_path)
+        assert watch._detect_running_phase() == "1-b"
+
+    def test_detect_none_when_no_index(self, tmp_path, monkeypatch):
+        import watch
+        monkeypatch.setattr(watch, "ROOT", tmp_path)
+        assert watch._detect_running_phase() is None

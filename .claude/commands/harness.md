@@ -207,7 +207,9 @@ execute.py가 자동으로 처리하는 것:
    - **Fail-safe**: 센티넬을 못 찾으면 IMPROVE 처리(자동 PASS 금지). `PASS`는 AC `exit 0` 근거가 있을 때만 유효.
    - **검증자 실패**: Joy 무응답이면 리드가 자가 승인하지 않고 `error`(verifier unavailable).
    - **미해결**: 내부 3회로도 안 되면 `error` + `no_retry: true` + Joy의 마지막 지시를 `error_message`에.
-6. 라운드별 대화를 `phases/{task}/step{N}-dialogue.md`에 1줄 ledger로 기록하고, phase-level `index.json`의 `team_round`로 진행을 노출(하트비트가 top-index로 복사).
+6. 진행하며 팀의 한국어 대화를 `phases/{task}/chat.md`에 `[리드]/[Max]/[Joy]/[Esther]` 대화체로 실시간 append한다(코드·diff 없이). phase-level `index.json`의 `team_round`로 진행도 노출(하트비트가 top-index로 복사).
+
+**실시간 대화창 (기본값)**: `execute.py`를 돌리면 팀 대화가 채팅처럼 터미널에 실시간 표시된다(🔵 Max · 🩷 Joy · 🟡 Esther · 🧭 리드). 별도 터미널 전용 뷰어: `python3 scripts/watch.py <task>` (렌더링은 `scripts/chat_view.py` 공유).
 
 **바깥 안전망**: 내부 루프가 끝나거나 세션이 죽으면(타임아웃 `TIMEOUT_SECONDS`=3600s 포함) `execute.py`가 status를 읽어 바깥 재시도·커밋·하트비트를 처리한다 → 2층 안전망.
 

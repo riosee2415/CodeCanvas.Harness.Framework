@@ -25,6 +25,7 @@
 
 - **하네스**: `python3 scripts/execute.py <task>`의 각 step은 팀 리드(헤드리스 세션)가 Max→(Esther)→Joy 루프로 자동 수행한다.
 - **인터랙티브**: `/team <작업>`으로 같은 팀을 호출한다.
+- **실시간 대화창(기본값)**: 실행 중 팀의 한국어 대화가 `phases/<task>/chat.md`에 흐르며 터미널에 채팅처럼 표시된다(🔵 Max · 🩷 Joy · 🟡 Esther · 🧭 리드). 별도 터미널: `python3 scripts/watch.py <task>`.
 - Joy는 보고 끝줄에 `VERDICT: PASS`/`VERDICT: IMPROVE`를 찍고, PASS는 AC `exit 0` 근거가 있을 때만 유효하다.
 - 모든 팀 대화·보고는 **한국어**로 한다.
 

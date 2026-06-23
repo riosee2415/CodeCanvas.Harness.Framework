@@ -20,6 +20,8 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
+import chat_view
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -247,6 +249,54 @@ class StepExecutor:
             stop.set()
             th.join()
 
+    # --- 라이브 팀 대화창 (chat.md) ---
+
+    def _chat_path(self) -> Path:
+        return self._phase_dir / "chat.md"
+
+    def _chat_header(self, step_num: int, step_name: str, attempt: int):
+        """이번 step 시작 구분선을 chat.md에 append한다 (리드가 대화를 이어 쓰기 전)."""
+        tag = f"=== Step {step_num}: {step_name}"
+        if attempt > 1:
+            tag += f" (재시도 {attempt})"
+        tag += " ==="
+        try:
+            with open(self._chat_path(), "a", encoding="utf-8") as f:
+                f.write(f"\n{tag}\n")
+        except OSError:
+            pass
+
+    @contextlib.contextmanager
+    def _chat_tailer(self):
+        """step 실행 동안 chat.md의 새 줄을 실시간으로 터미널에 채팅처럼 출력한다.
+
+        시작 시점의 줄 수를 세어 '이번 step' 이후만 출력한다(이전 step 재출력 방지).
+        리드(헤드리스 세션)가 chat.md에 append하는 주체이고, 여기선 읽기만 하므로 경합 없음.
+        """
+        path = str(self._chat_path())
+        _, start = chat_view.read_new_lines(path, 0)
+        color = sys.stdout.isatty()
+        stop = threading.Event()
+
+        def _emit(line):
+            rendered = chat_view.render_chat_line(line, color=color)
+            if rendered:
+                sys.stdout.write(rendered + "\n")
+                sys.stdout.flush()
+
+        th = threading.Thread(
+            target=chat_view.follow,
+            args=(path, stop, _emit),
+            kwargs={"start_count": start},
+            daemon=True,
+        )
+        th.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            th.join()
+
     # --- guardrails & context ---
 
     def _load_guardrails(self) -> str:
@@ -312,8 +362,14 @@ class StepExecutor:
             f"IMPROVE로 강등한다. (커맨드가 없는 docs-only step은 체크리스트 근거로 대체.)\n"
             f"   - **검증자 실패**: Joy의 Task가 죽거나·무응답이거나·센티넬을 못 찾으면 스스로 PASS를 만들지 말고 "
             f"step을 error(\"verifier unavailable\")로 두고 멈춘다. (리드 직접처리 폴백은 생산자 Max·Esther에만.)\n"
-            f"6. **대화 기록**: phases/{d}/step<N>-dialogue.md에 라운드당 1줄 ledger로 누적한다 "
-            f"(round / 행위자[리드·Max·Esther·Joy] / Joy 판정 / 한 줄 지시). 전체 출력 붙여넣기 금지.\n"
+            f"6. **실시간 대화창** (이 프레임워크의 핵심 — 사용자는 팀이 일하는 모습을 채팅으로 실시간으로 본다): "
+            f"팀 대화를 phases/{d}/chat.md에 한 줄씩 즉시 쌓는다. **리드**는 step 헤더와 [리드] 메시지(지시·정리)를 쓴다. "
+            f"**각 서브에이전트**를 Task로 호출할 때 이 chat.md 경로를 알려주고 '작업하며 **네 페르소나 말투로** [이름] 형식 한 줄을 "
+            f"그때그때 append하라'고 지시한다 (Max=차분·겸손, Joy=밝고 활기참, Esther=따뜻하지만 자신 있게 — 자세한 건 .claude/agents/ 정의). "
+            f"직원들은 가끔(~5%) 실없는 농담도 섞어 사람이 보기 즐겁게 하되, 일·검증은 진지하게 한다. "
+            f"서브에이전트가 빠뜨리면 리드가 그 팀원 말투로 대신 한 줄 남긴다. **코드·diff·전체 출력 금지** — 무엇을 하고/했는지만 대화체로. "
+            f"예: [리드] Max님, step 구현 부탁해요 · [Max] 조용히 마무리해뒀어요, pytest 통과했습니다 · "
+            f"[리드] Joy님 검수 부탁드려요 · [Joy] 오 빠르다~ 바로 돌려볼게요! exit 0, 통과예요 🎉\n"
             f"7. **진행 노출**: phases/{d}/index.json에 \"team_round\" 필드를 갱신한다(예: \"2/{r} IMPROVE\").\n"
             f"8. **내부 루프 미해결**: 내부 {r}회로도 해결 못 하면(비-blocked) step status를 error로, "
             f"**\"no_retry\": true**를 함께 기록하고 Joy의 마지막 개선지시 top-3를 error_message에 적는다.\n\n"
@@ -386,11 +442,13 @@ class StepExecutor:
 
     def _print_header(self):
         print(f"\n{'='*60}")
-        print(f"  Harness Step Executor")
+        print(f"  💼 팀 하네스 — '{self._project}'")
+        print(f"  팀원   🔵 Max(개발)    🩷 Joy(검수)    🟡 Esther(UI/UX)")
         print(f"  Phase: {self._phase_name} | Steps: {self._total}")
         if self._auto_push:
             print(f"  Auto-push: enabled")
         print(f"{'='*60}")
+        print(f"  팀이 일하는 대화를 실시간으로 봅니다 — 별도 창: python3 scripts/watch.py {self._phase_dir_name}")
 
     def _check_blockers(self):
         index = self._read_json(self._index_file)
@@ -500,11 +558,14 @@ class StepExecutor:
             tag = f"Step {step_num}/{self._total - 1} ({done} done): {step_name}"
             if attempt > 1:
                 tag += f" [retry {attempt}/{self.OUTER_ATTEMPTS}]"
+            print(f"\n▶ {tag} — 팀 대화 시작 …")
 
-            with progress_indicator(tag) as pi:
+            t0 = time.monotonic()
+            with self._chat_tailer():
+                self._chat_header(step_num, step_name, attempt)
                 with self._heartbeat(step_num, step_name, attempt, done):
                     out = self._invoke_claude(step, preamble)
-                elapsed = int(pi.elapsed)
+            elapsed = int(time.monotonic() - t0)
 
             index = self._read_json(self._index_file)
             step_obj = next((s for s in index["steps"] if s["step"] == step_num), {})
