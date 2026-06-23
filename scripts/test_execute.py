@@ -1003,6 +1003,27 @@ class TestChatView:
     def test_render_unknown_speaker_keeps_text(self):
         assert "Bob" in cv.render_chat_line("[Bob] hi", color=False)
 
+    @staticmethod
+    def _bg_codes(s):
+        import re
+        codes = set()
+        for seq in re.findall(r"\033\[([0-9;]+)m", s):
+            for p in seq.split(";"):
+                if p.isdigit() and (40 <= int(p) <= 47 or 100 <= int(p) <= 107):
+                    codes.add(int(p))
+        return frozenset(codes)
+
+    def test_render_uses_background_color(self):
+        # 사용자 요청: 이름을 '배경색 배지'로 구분한다.
+        for spk in ("리드", "Max", "Joy", "Esther"):
+            out = cv.render_chat_line(f"[{spk}] hi", color=True)
+            assert self._bg_codes(out), f"{spk} 배지에 배경색 SGR이 없음"
+
+    def test_render_speakers_have_distinct_backgrounds(self):
+        seen = {spk: self._bg_codes(cv.render_chat_line(f"[{spk}] hi", color=True))
+                for spk in ("리드", "Max", "Joy", "Esther")}
+        assert len(set(seen.values())) == 4  # 4명 모두 다른 배경색
+
     def test_render_separator(self):
         assert "Step 0" in cv.render_chat_line("=== Step 0: adder ===", color=False)
 
@@ -1056,6 +1077,30 @@ class TestChatView:
         th.join()
         assert "[Max] hi" in got
         assert "[Joy] 통과" in got
+
+
+# ---------------------------------------------------------------------------
+# 대화창 색상 — FORCE_COLOR (파이프 실행 시에도 컬러 유지)
+# ---------------------------------------------------------------------------
+
+class TestUseColor:
+    class _Stream:
+        def __init__(self, tty):
+            self._tty = tty
+        def isatty(self):
+            return self._tty
+
+    def test_force_color_env_forces_on_even_when_piped(self, monkeypatch):
+        monkeypatch.setenv("FORCE_COLOR", "1")
+        assert ex.StepExecutor._use_color(self._Stream(tty=False)) is True
+
+    def test_tty_is_on(self, monkeypatch):
+        monkeypatch.delenv("FORCE_COLOR", raising=False)
+        assert ex.StepExecutor._use_color(self._Stream(tty=True)) is True
+
+    def test_pipe_without_force_is_off(self, monkeypatch):
+        monkeypatch.delenv("FORCE_COLOR", raising=False)
+        assert ex.StepExecutor._use_color(self._Stream(tty=False)) is False
 
 
 # ---------------------------------------------------------------------------

@@ -254,6 +254,17 @@ class StepExecutor:
     def _chat_path(self) -> Path:
         return self._phase_dir / "chat.md"
 
+    @staticmethod
+    def _use_color(stream=None) -> bool:
+        """대화창 ANSI 색 사용 여부. tty이거나 FORCE_COLOR가 설정되면 켠다.
+
+        하네스를 파이프(예: Claude Code의 bash 도구, `| tee`)로 실행하면
+        stdout.isatty()가 False라 색이 꺼진다. FORCE_COLOR=1을 주면 그 경우에도
+        배경색 배지를 유지한다 — 라이브 대화창은 색이 핵심이므로.
+        """
+        stream = stream or sys.stdout
+        return bool(os.environ.get("FORCE_COLOR")) or stream.isatty()
+
     def _chat_header(self, step_num: int, step_name: str, attempt: int):
         """이번 step 시작 구분선을 chat.md에 append한다 (리드가 대화를 이어 쓰기 전)."""
         tag = f"=== Step {step_num}: {step_name}"
@@ -275,7 +286,7 @@ class StepExecutor:
         """
         path = str(self._chat_path())
         _, start = chat_view.read_new_lines(path, 0)
-        color = sys.stdout.isatty()
+        color = self._use_color()
         stop = threading.Event()
 
         def _emit(line):
