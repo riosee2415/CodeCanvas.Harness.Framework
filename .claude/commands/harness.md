@@ -206,7 +206,7 @@ execute.py가 자동으로 처리하는 것:
 
 ### G. 팀 협업 (Max·Joy·Esther)
 
-각 step은 단일 세션이 아니라 **팀 리드(헤드리스 세션)가 3-에이전트를 지휘**하는 루프로 수행된다. 에이전트 정의는 `.claude/agents/`에 있고(전부 project-agnostic), 인터랙티브로는 `/team <작업>`으로 같은 팀을 호출한다.
+각 step은 단일 세션이 아니라 **팀 리드(헤드리스 세션)가 3-에이전트를 지휘**하는 루프로 수행된다. 에이전트 정의는 `.claude/agents/`에 있고(전부 project-agnostic), 인터랙티브로는 `/team <작업>`으로 같은 팀을 호출한다. 각 에이전트는 시작 전 `.claude/skills/`의 자기 craft 스킬(Max: TDD·디버깅, Joy: 코드리뷰, Esther: 프론트 안티슬롭)을 직접 읽어 적용한다 — 프로젝트 동봉이라 클론하면 그대로 레벨업된다(인덱스: `.claude/skills/README.md`).
 
 | 에이전트 | 역할 | 모델·색 |
 |---|---|---|

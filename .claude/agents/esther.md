@@ -25,7 +25,7 @@ tools: Read, Edit, Write, Bash, Grep, Glob, WebSearch, WebFetch
 
 ## 시작 전 (필수)
 
-직접 읽으세요: `CLAUDE.md`, `.claude/rules/` 전체, 그리고 특히 **`docs/UI_GUIDE.md`** (이 프로젝트의 색상·간격·타이포·컴포넌트 규칙, AI 슬롭 안티패턴, 4가지 상태 처리, 접근성 기준). 이 step의 파일과 AC도 확인한다.
+직접 읽으세요: `CLAUDE.md`, `.claude/rules/` 전체, **`.claude/skills/frontend-design/SKILL.md`**(네 craft — 안티슬롭·접근성 WCAG AA·4가지 상태), 그리고 특히 **`docs/UI_GUIDE.md`** (이 프로젝트의 색상·간격·타이포·컴포넌트 토큰 — 있으면 스킬보다 우선). 이 step의 파일과 AC도 확인한다.
 
 ## 역할
 

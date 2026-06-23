@@ -25,6 +25,7 @@
 
 - **하네스**: `python3 scripts/run.py <task>`(권장 — 하네스는 백그라운드, 컬러 대화만 실시간) 또는 `python3 scripts/execute.py <task>`. 각 step은 팀 리드(헤드리스 세션)가 Max→(Esther)→Joy 루프로 자동 수행한다.
 - **인터랙티브**: `/team <작업>`으로 같은 팀을 호출한다.
+- **스킬(craft 역량)**: 각 에이전트는 시작 전 `.claude/skills/`의 자기 스킬을 로드한다 — Max: TDD·디버깅, Joy: 코드리뷰(독립검증), Esther: 프론트 안티슬롭·접근성. 프로젝트에 동봉되어 클론하면 그대로 적용된다(인덱스: `.claude/skills/README.md`).
 - **실시간 대화창(기본값·프레임워크 핵심)**: 팀의 한국어 대화가 `phases/<task>/chat.md`에 흐르며 터미널에 채팅처럼 표시된다 — **배경색 이름 배지**(🔵 Max · 🩷 Joy · 🟡 Esther · 🧭 리드), 긴 줄은 폭에 맞춰 줄바꿈. 세 가지 보기 방식:
   - `python3 scripts/run.py <task>` — 한 phase: 하네스를 백그라운드로 돌리고 이 터미널에 대화만, 끝나면 자동 종료 (권장·간편).
   - `python3 scripts/chat.py` — **상시 대화창**: 한 번 띄워두면 phase에 안 묶이고, 어떤 phase의 하네스가 돌든 그 대화로 자동 연결·전환. 여러 phase를 연속으로 돌릴 때. 하네스는 옆에서 `python3 scripts/execute.py <task> --quiet`로 돌린다(`--quiet`는 하네스 자체 인라인 표시를 꺼 chat.py와 이중 표시 방지).
