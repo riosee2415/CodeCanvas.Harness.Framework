@@ -64,13 +64,14 @@ class StepExecutor:
     TZ = timezone(timedelta(hours=9))
     STALE_AFTER_DAYS = 14  # rules.md가 이 일수 이상 리뷰되지 않으면 경고
 
-    def __init__(self, phase_dir_name: str, *, auto_push: bool = False):
+    def __init__(self, phase_dir_name: str, *, auto_push: bool = False, quiet: bool = False):
         self._root = str(ROOT)
         self._phases_dir = ROOT / "phases"
         self._phase_dir = self._phases_dir / phase_dir_name
         self._phase_dir_name = phase_dir_name
         self._top_index_file = self._phases_dir / "index.json"
         self._auto_push = auto_push
+        self._quiet = quiet  # True면 인라인 대화 표시를 끈다 (상시 chat.py가 전담)
 
         if not self._phase_dir.is_dir():
             print(f"ERROR: {self._phase_dir} not found")
@@ -283,7 +284,13 @@ class StepExecutor:
 
         시작 시점의 줄 수를 세어 '이번 step' 이후만 출력한다(이전 step 재출력 방지).
         리드(헤드리스 세션)가 chat.md에 append하는 주체이고, 여기선 읽기만 하므로 경합 없음.
+
+        --quiet면 표시 스레드를 띄우지 않는다 — chat.md 기록은 그대로 쌓이므로
+        상시 뷰어(scripts/chat.py)가 대화를 전담 표시한다 (이중 표시 방지).
         """
+        if self._quiet:
+            yield
+            return
         path = str(self._chat_path())
         _, start = chat_view.read_new_lines(path, 0)
         color = self._use_color()
@@ -676,9 +683,11 @@ def main():
     parser = argparse.ArgumentParser(description="Harness Step Executor")
     parser.add_argument("phase_dir", help="Phase directory name (e.g. 0-mvp)")
     parser.add_argument("--push", action="store_true", help="Push branch after completion")
+    parser.add_argument("--quiet", "--no-chat", action="store_true", dest="quiet",
+                        help="인라인 대화 표시를 끈다 (상시 뷰어 scripts/chat.py와 함께 쓸 때)")
     args = parser.parse_args()
 
-    StepExecutor(args.phase_dir, auto_push=args.push).run()
+    StepExecutor(args.phase_dir, auto_push=args.push, quiet=args.quiet).run()
 
 
 if __name__ == "__main__":

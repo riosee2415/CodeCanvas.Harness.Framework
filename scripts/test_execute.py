@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -1218,3 +1219,206 @@ class TestRunLauncher:
         rendered, count = rn._drain(p, count, color=False)
         assert len(rendered) == 1
         assert "b" in rendered[0]
+
+
+# ---------------------------------------------------------------------------
+# chat.py — 상시 팀 대화창 (한 번 띄워두면 활성 phase의 하네스에 자동 연결)
+# ---------------------------------------------------------------------------
+
+class TestChatFollower:
+    """phase에 묶이지 않는 상시 뷰어. 어떤 phase의 하네스가 돌든 그 대화로 따라간다.
+
+    핵심 규칙: 시작 시점에 이미 있던 줄은 '본 것'으로 간주(옛 기록 덤프 방지),
+    그 뒤로 쌓이는 줄만 라이브로 보여준다. mtime이 가장 최신인 chat.md가 '활성'.
+    """
+
+    def _chat(self, phases_dir, name, text, mtime):
+        d = phases_dir / name
+        d.mkdir(parents=True, exist_ok=True)
+        c = d / "chat.md"
+        c.write_text(text, encoding="utf-8")
+        os.utime(c, (mtime, mtime))  # write 후에 설정해야 mtime이 안 덮인다
+        return c
+
+    def _join(self, lines):
+        return "".join(lines)
+
+    def test_freshest_picks_most_recently_written(self, tmp_path):
+        import chat as ch
+        phases = tmp_path / "phases"
+        self._chat(phases, "0-a", "[Max] a\n", mtime=1000)
+        self._chat(phases, "1-b", "[Joy] b\n", mtime=2000)
+        name, path = ch._freshest_chat(phases)
+        assert name == "1-b"
+        assert path.name == "chat.md"
+
+    def test_freshest_none_when_empty(self, tmp_path):
+        import chat as ch
+        (tmp_path / "phases").mkdir()
+        assert ch._freshest_chat(tmp_path / "phases") == (None, None)
+
+    def test_preexisting_history_not_dumped(self, tmp_path):
+        import chat as ch
+        phases = tmp_path / "phases"
+        self._chat(phases, "0-a", "[Max] 옛날1\n[Joy] 옛날2\n", mtime=1000)
+        f = ch.Follower(phases, color=False)
+        assert f.poll() == []  # 시작 전 기록은 다시 안 뱉는다
+
+    def test_new_appended_line_is_emitted_live(self, tmp_path):
+        import chat as ch
+        phases = tmp_path / "phases"
+        c = self._chat(phases, "0-a", "[Max] 옛날\n", mtime=1000)
+        f = ch.Follower(phases, color=False)
+        assert f.poll() == []
+        c.write_text("[Max] 옛날\n[Joy] 새거\n", encoding="utf-8")
+        os.utime(c, (3000, 3000))
+        out = self._join(f.poll())
+        assert "새거" in out
+        assert "옛날" not in out  # 옛 줄은 라이브로 재출력 안 함
+
+    def test_banner_on_first_real_activity(self, tmp_path):
+        import chat as ch
+        phases = tmp_path / "phases"
+        c = self._chat(phases, "2-mvp", "", mtime=1000)
+        f = ch.Follower(phases, color=False)
+        c.write_text("[리드] step 0 시작\n", encoding="utf-8")
+        os.utime(c, (3000, 3000))
+        out = self._join(f.poll())
+        assert "2-mvp" in out  # 연결 배너에 phase 이름
+
+    def test_switches_to_newly_active_phase(self, tmp_path):
+        import chat as ch
+        phases = tmp_path / "phases"
+        a = self._chat(phases, "0-a", "[Max] a옛\n", mtime=1000)
+        f = ch.Follower(phases, color=False)
+        a.write_text("[Max] a옛\n[Max] a라이브\n", encoding="utf-8")
+        os.utime(a, (2000, 2000))
+        assert "a라이브" in self._join(f.poll())
+        # 이제 다른 phase의 하네스가 새로 돌기 시작 (더 최신 mtime)
+        self._chat(phases, "1-b", "[Joy] b라이브\n", mtime=3000)
+        out = self._join(f.poll())
+        assert "b라이브" in out
+        assert "1-b" in out  # 전환 배너
+
+    def test_new_phase_dir_after_start_shown_from_top(self, tmp_path):
+        import chat as ch
+        phases = tmp_path / "phases"
+        self._chat(phases, "0-a", "[Max] a\n", mtime=1000)
+        f = ch.Follower(phases, color=False)
+        self._chat(phases, "1-new", "[리드] 안녕\n[Max] 시작\n", mtime=5000)
+        out = self._join(f.poll())
+        assert "안녕" in out and "시작" in out  # 시작 후 생긴 파일은 처음부터
+
+    def test_no_double_emit_incremental(self, tmp_path):
+        import chat as ch
+        phases = tmp_path / "phases"
+        c = self._chat(phases, "0-a", "", mtime=1000)
+        f = ch.Follower(phases, color=False)
+        c.write_text("[Max] 하나\n", encoding="utf-8")
+        os.utime(c, (2000, 2000))
+        f.poll()
+        c.write_text("[Max] 하나\n[Max] 둘\n", encoding="utf-8")
+        os.utime(c, (3000, 3000))
+        out = self._join(f.poll())
+        assert "둘" in out
+        assert "하나" not in out  # 이미 본 줄 재출력 금지
+
+    def test_use_color_force_env(self, monkeypatch):
+        import chat as ch
+        monkeypatch.setenv("FORCE_COLOR", "1")
+
+        class S:
+            def isatty(self):
+                return False
+        assert ch._use_color(S()) is True
+
+    def test_use_color_pipe_off(self, monkeypatch):
+        import chat as ch
+        monkeypatch.delenv("FORCE_COLOR", raising=False)
+
+        class S:
+            def isatty(self):
+                return False
+        assert ch._use_color(S()) is False
+
+    def test_banner_uses_color_when_enabled(self, tmp_path):
+        import chat as ch
+        phases = tmp_path / "phases"
+        c = self._chat(phases, "0-a", "", mtime=1000)
+        f = ch.Follower(phases, color=True)
+        c.write_text("[Max] hi\n", encoding="utf-8")
+        os.utime(c, (2000, 2000))
+        out = self._join(f.poll())
+        assert "\033[" in out  # 컬러 켜면 ANSI 포함
+
+
+# ---------------------------------------------------------------------------
+# execute.py --quiet — 인라인 대화 표시를 끈다 (상시 chat.py와 이중 표시 방지)
+# ---------------------------------------------------------------------------
+
+class TestQuietMode:
+    """--quiet면 하네스는 chat.md에 기록은 계속하되, 자기 stdout으로는 대화를
+    표시하지 않는다. 표시는 상시 뷰어(chat.py)가 전담한다."""
+
+    def _mk(self, tmp_project, phase_dir, **kw):
+        with patch.object(ex, "ROOT", tmp_project):
+            inst = ex.StepExecutor("0-mvp", **kw)
+        inst._phase_dir = phase_dir
+        inst._phase_dir_name = "0-mvp"
+        return inst
+
+    def test_default_not_quiet(self, executor):
+        assert executor._quiet is False
+
+    def test_quiet_flag_stored(self, tmp_project, phase_dir):
+        inst = self._mk(tmp_project, phase_dir, quiet=True)
+        assert inst._quiet is True
+
+    def test_quiet_tailer_does_not_spawn_follow(self, tmp_project, phase_dir, monkeypatch):
+        inst = self._mk(tmp_project, phase_dir, quiet=True)
+        called = {"n": 0}
+        monkeypatch.setattr(cv, "follow",
+                            lambda *a, **k: called.__setitem__("n", called["n"] + 1))
+        with inst._chat_tailer():
+            pass
+        assert called["n"] == 0  # quiet면 인라인 표시 스레드를 안 띄운다
+
+    def test_loud_tailer_spawns_follow(self, tmp_project, phase_dir, monkeypatch):
+        inst = self._mk(tmp_project, phase_dir, quiet=False)
+        ev = threading.Event()
+
+        def fake_follow(path, stop, emit, **k):
+            ev.set()
+            stop.wait(0.05)
+        monkeypatch.setattr(cv, "follow", fake_follow)
+        with inst._chat_tailer():
+            assert ev.wait(1.0)  # loud면 인라인 표시 스레드가 뜬다
+
+    def test_cli_parses_quiet(self, monkeypatch):
+        captured = {}
+
+        class FakeExec:
+            def __init__(self, phase, **kw):
+                captured["phase"] = phase
+                captured.update(kw)
+
+            def run(self):
+                pass
+        monkeypatch.setattr(ex, "StepExecutor", FakeExec)
+        monkeypatch.setattr(sys, "argv", ["execute.py", "0-mvp", "--quiet"])
+        ex.main()
+        assert captured["quiet"] is True
+
+    def test_cli_default_quiet_false(self, monkeypatch):
+        captured = {}
+
+        class FakeExec:
+            def __init__(self, phase, **kw):
+                captured.update(kw)
+
+            def run(self):
+                pass
+        monkeypatch.setattr(ex, "StepExecutor", FakeExec)
+        monkeypatch.setattr(sys, "argv", ["execute.py", "0-mvp"])
+        ex.main()
+        assert captured["quiet"] is False
