@@ -158,10 +158,11 @@ execute.py가 자동으로 처리하는 것:
 - `feat-{task-name}` 브랜치 생성/checkout
 - 가드레일 주입 — CLAUDE.md + `.claude/rules/*.md` + docs/*.md 내용을 매 step 프롬프트에 포함
 - 컨텍스트 누적 — 완료된 step의 summary를 다음 step 프롬프트에 전달
-- 자가 교정 — 실패 시 최대 3회 재시도하며, 이전 에러 메시지를 프롬프트에 피드백
+- 팀 협업 — 각 step을 팀 리드가 Max→(Esther)→Joy 루프로 수행하고, Joy 판정(통과/개선)으로 내부 최대 3회 개선 (G 참조)
+- 자가 교정(2층) — 내부 팀 루프(`INNER_ROUNDS`=3) + 바깥 재시도(`OUTER_ATTEMPTS`=2, 프로세스 실패·타임아웃 복구), 이전 에러·stderr 꼬리를 다음 프롬프트에 피드백
 - 2단계 커밋 — 코드 변경(`feat`)과 메타데이터(`chore`)를 분리 커밋
 - 타임스탬프 — started_at, completed_at, failed_at, blocked_at 자동 기록
-- 라이브 하트비트 — 실행 중인 step의 진행 상태를 60초마다 `phases/index.json`에 기록 (외부에서 실시간 모니터링 가능)
+- 라이브 하트비트 — 실행 중인 step의 진행 상태를 60초마다 `phases/index.json`에 기록 (`team_round`로 내부 라운드 진행도 노출, 외부에서 실시간 모니터링 가능)
 - 규칙 신선도 점검 — 시작 시 검토 대기 제안·staleness 경고 표면화 (F 참조)
 
 에러 복구:
@@ -185,3 +186,32 @@ execute.py가 자동으로 처리하는 것:
 3. **merge (수동, 사람)** — 사람이 제안을 취사선택해 `.claude/rules/rules.md`에 반영하고, 병합한 `rules-proposals.md`를 삭제한 뒤 `last_reviewed=`를 오늘 날짜로 갱신한다.
 
 규칙을 추가/수정하는 트리거(Anthropic): ① 같은 실수 2번째 ② 코드 리뷰가 에이전트가 알았어야 할 것을 잡아냄 ③ 같은 교정 재입력 ④ 새 팀원이 필요로 할 맥락. 추가만큼 **가지치기**도 중요하다 — "이 줄을 지우면 에이전트가 실수하게 되는가? 아니면 삭제."
+
+### G. 팀 협업 (Max·Joy·Esther)
+
+각 step은 단일 세션이 아니라 **팀 리드(헤드리스 세션)가 3-에이전트를 지휘**하는 루프로 수행된다. 에이전트 정의는 `.claude/agents/`에 있고(전부 project-agnostic), 인터랙티브로는 `/team <작업>`으로 같은 팀을 호출한다.
+
+| 에이전트 | 역할 | 모델·색 |
+|---|---|---|
+| **Max** | 개발/엔지니어 — 구현·TDD | opus-4-8 · 🔵 |
+| **Joy** | 검수자 — git diff + AC 재실행으로 통과/개선 판정 | opus-4-8 · 🩷 |
+| **Esther** | UI/UX — 디자인·프론트엔드 (UI step만 투입) | opus-4-8 · 🟡 |
+
+루프 (팀 리드가 `execute.py` preamble의 "팀 협업 프로토콜"에 따라 수행):
+
+1. **Max**가 step을 구현 → 한국어 보고.
+2. UI·디자인 신호가 있으면 **Esther** 투입(순수 백엔드면 생략).
+3. 리드가 step의 AC를 직접 실행해 결과(커맨드 + exit code) 확보.
+4. **Joy**가 git diff + AC 결과로 검수 → 보고 끝줄에 `VERDICT: PASS` 또는 `VERDICT: IMPROVE`.
+5. `IMPROVE`면 Joy의 `개선지시(→Max)`로 수정→재검수, **내부 최대 3회**(`INNER_ROUNDS`).
+   - **Fail-safe**: 센티넬을 못 찾으면 IMPROVE 처리(자동 PASS 금지). `PASS`는 AC `exit 0` 근거가 있을 때만 유효.
+   - **검증자 실패**: Joy 무응답이면 리드가 자가 승인하지 않고 `error`(verifier unavailable).
+   - **미해결**: 내부 3회로도 안 되면 `error` + `no_retry: true` + Joy의 마지막 지시를 `error_message`에.
+6. 라운드별 대화를 `phases/{task}/step{N}-dialogue.md`에 1줄 ledger로 기록하고, phase-level `index.json`의 `team_round`로 진행을 노출(하트비트가 top-index로 복사).
+
+**바깥 안전망**: 내부 루프가 끝나거나 세션이 죽으면(타임아웃 `TIMEOUT_SECONDS`=3600s 포함) `execute.py`가 status를 읽어 바깥 재시도·커밋·하트비트를 처리한다 → 2층 안전망.
+
+**재사용성 주의 (다운스트림 복사 시):**
+- 루프의 ground-truth 게이트는 **Joy가 실행하는 step AC**(각 프로젝트가 step.md에 정의)이며 project-agnostic하다.
+- `.claude/settings.json`의 **Stop 훅**은 *다운스트림 프로젝트의* 검증 커맨드 placeholder(기본값 `npm run lint && build && test`)다 — 복사한 프로젝트의 lint/build/test로 교체하라. (이 하네스 레포 자체 테스트는 `python3 -m pytest scripts/test_execute.py`.)
+- Joy를 다른 모델로 두려면 `joy.md`의 `model:`만 바꾸면 된다(기본은 Max와 동급인 opus-4-8).

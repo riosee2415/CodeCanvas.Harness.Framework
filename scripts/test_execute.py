@@ -263,9 +263,9 @@ class TestBuildPreamble:
         assert "이전 시도 실패" in result
         assert "타입 에러 발생" in result
 
-    def test_includes_max_retries(self, executor):
+    def test_includes_inner_rounds(self, executor):
         result = executor._build_preamble("", "")
-        assert str(ex.StepExecutor.MAX_RETRIES) in result
+        assert str(ex.StepExecutor.INNER_ROUNDS) in result
 
     def test_includes_index_path(self, executor):
         result = executor._build_preamble("", "")
@@ -521,14 +521,15 @@ class TestInvokeClaude:
             executor._invoke_claude(step, "preamble")
         assert exc_info.value.code == 1
 
-    def test_timeout_is_1800(self, executor):
+    def test_timeout_is_timeout_seconds(self, executor):
         mock_result = MagicMock(returncode=0, stdout="{}", stderr="")
         step = {"step": 2, "name": "ui"}
 
         with patch("subprocess.run", return_value=mock_result) as mock_run:
             executor._invoke_claude(step, "preamble")
 
-        assert mock_run.call_args[1]["timeout"] == 1800
+        assert mock_run.call_args[1]["timeout"] == ex.StepExecutor.TIMEOUT_SECONDS
+        assert ex.StepExecutor.TIMEOUT_SECONDS == 3600
 
 
 # ---------------------------------------------------------------------------
@@ -694,3 +695,262 @@ class TestRulesFreshness:
         result = executor._build_preamble("", "")
         assert "rules-proposals.md" in result
         assert "신선도" in result
+
+
+# ---------------------------------------------------------------------------
+# 팀 협업 — 상수 (INNER_ROUNDS / OUTER_ATTEMPTS / TIMEOUT_SECONDS)
+# ---------------------------------------------------------------------------
+
+class TestTeamConstants:
+    def test_inner_rounds_is_3(self):
+        assert ex.StepExecutor.INNER_ROUNDS == 3
+
+    def test_outer_attempts_is_2(self):
+        assert ex.StepExecutor.OUTER_ATTEMPTS == 2
+
+    def test_timeout_seconds_is_3600(self):
+        assert ex.StepExecutor.TIMEOUT_SECONDS == 3600
+
+
+# ---------------------------------------------------------------------------
+# 팀 협업 — 프리앰블(팀 리드 프로토콜)
+# ---------------------------------------------------------------------------
+
+class TestTeamPreamble:
+    def test_frames_session_as_team_lead(self, executor):
+        r = executor._build_preamble("", "")
+        assert "팀 리드" in r
+
+    def test_names_all_three_agents(self, executor):
+        r = executor._build_preamble("", "")
+        assert "Max" in r
+        assert "Joy" in r
+        assert "Esther" in r
+
+    def test_includes_verdict_sentinel_grammar(self, executor):
+        r = executor._build_preamble("", "")
+        assert "VERDICT: PASS" in r
+        assert "VERDICT: IMPROVE" in r
+
+    def test_includes_inner_rounds_bound(self, executor):
+        r = executor._build_preamble("", "")
+        assert str(ex.StepExecutor.INNER_ROUNDS) in r
+
+    def test_references_dialogue_ledger(self, executor):
+        r = executor._build_preamble("", "")
+        assert "dialogue" in r
+
+    def test_includes_no_retry_protocol(self, executor):
+        r = executor._build_preamble("", "")
+        assert "no_retry" in r
+
+    def test_points_subagents_to_read_rules_themselves(self, executor):
+        r = executor._build_preamble("", "")
+        # 서브에이전트는 CLAUDE.md만 자동 로드되므로, 가드레일을 직접 읽으라는 포인터가 필요
+        assert ".claude/rules" in r
+        assert "직접 읽" in r
+
+    def test_binds_pass_to_ac_exit_code(self, executor):
+        r = executor._build_preamble("", "")
+        assert "exit" in r.lower()
+
+    # 기존 규약 보존 확인
+    def test_still_includes_status_protocol(self, executor):
+        r = executor._build_preamble("", "")
+        assert "completed" in r
+        assert "blocked" in r
+
+    def test_still_includes_commit_example(self, executor):
+        r = executor._build_preamble("", "")
+        assert "feat(mvp):" in r
+
+    def test_still_includes_freshness(self, executor):
+        r = executor._build_preamble("", "")
+        assert "rules-proposals.md" in r
+
+
+# ---------------------------------------------------------------------------
+# 팀 협업 — _invoke_claude 타임아웃 안전성 (terminal로 귀결, 미예외)
+# ---------------------------------------------------------------------------
+
+class TestInvokeClaudeTimeout:
+    def test_timeout_does_not_raise(self, executor):
+        step = {"step": 2, "name": "ui"}
+        with patch("subprocess.run",
+                   side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=10)):
+            executor._invoke_claude(step, "preamble")  # 예외를 던지면 안 됨
+
+    def test_timeout_returns_nonzero_exit(self, executor):
+        step = {"step": 2, "name": "ui"}
+        with patch("subprocess.run",
+                   side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=10)):
+            out = executor._invoke_claude(step, "preamble")
+        assert out["exitCode"] != 0
+
+    def test_timeout_message_in_stderr(self, executor):
+        step = {"step": 2, "name": "ui"}
+        with patch("subprocess.run",
+                   side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=10)):
+            out = executor._invoke_claude(step, "preamble")
+        assert "timed out" in (out["stderr"] or "").lower()
+
+
+# ---------------------------------------------------------------------------
+# 팀 협업 — _execute_single_step 신호 주입 / 재시도 정합 / no_retry 단락
+# ---------------------------------------------------------------------------
+
+class TestExecuteSingleStepSignals:
+    def _neuter(self, executor):
+        """git/commit/top-index 부수효과 제거."""
+        executor._commit_step = lambda *a, **k: None
+        executor._update_top_index = lambda *a, **k: None
+        executor._run_git = lambda *a, **k: MagicMock(returncode=0, stdout="", stderr="")
+
+    def _set_status(self, executor, step_num, **fields):
+        idx = json.loads(executor._index_file.read_text())
+        for s in idx["steps"]:
+            if s["step"] == step_num:
+                s.update(fields)
+        executor._index_file.write_text(json.dumps(idx, ensure_ascii=False))
+
+    def test_unset_status_injects_stderr_and_exit_into_error(self, executor):
+        self._neuter(executor)
+        executor._invoke_claude = lambda step, preamble: {
+            "step": step["step"], "name": step["name"],
+            "exitCode": 2, "stdout": "", "stderr": "boom-traceback-XYZ",
+        }
+        with pytest.raises(SystemExit):
+            executor._execute_single_step({"step": 2, "name": "ui"}, "guard")
+        idx = json.loads(executor._index_file.read_text())
+        err = next(s.get("error_message", "") for s in idx["steps"] if s["step"] == 2)
+        assert "boom-traceback-XYZ" in err
+        assert "exit 2" in err
+
+    def test_error_with_no_retry_terminates_in_one_pass(self, executor):
+        self._neuter(executor)
+        calls = {"n": 0}
+
+        def fake(step, preamble):
+            calls["n"] += 1
+            self._set_status(executor, step["step"],
+                             status="error", error_message="unresolved", no_retry=True)
+            return {"step": step["step"], "name": step["name"],
+                    "exitCode": 0, "stdout": "", "stderr": ""}
+
+        executor._invoke_claude = fake
+        with pytest.raises(SystemExit):
+            executor._execute_single_step({"step": 2, "name": "ui"}, "guard")
+        assert calls["n"] == 1
+
+    def test_plain_error_retries_to_outer_attempts(self, executor):
+        self._neuter(executor)
+        calls = {"n": 0}
+
+        def fake(step, preamble):
+            calls["n"] += 1
+            self._set_status(executor, step["step"],
+                             status="error", error_message="boom")
+            return {"step": step["step"], "name": step["name"],
+                    "exitCode": 1, "stdout": "", "stderr": "boom"}
+
+        executor._invoke_claude = fake
+        with pytest.raises(SystemExit):
+            executor._execute_single_step({"step": 2, "name": "ui"}, "guard")
+        assert calls["n"] == ex.StepExecutor.OUTER_ATTEMPTS
+
+    def test_completed_status_returns_true_without_exit(self, executor):
+        self._neuter(executor)
+
+        def fake(step, preamble):
+            self._set_status(executor, step["step"], status="completed", summary="done")
+            return {"step": step["step"], "name": step["name"],
+                    "exitCode": 0, "stdout": "", "stderr": ""}
+
+        executor._invoke_claude = fake
+        result = executor._execute_single_step({"step": 2, "name": "ui"}, "guard")
+        assert result is True
+
+
+# ---------------------------------------------------------------------------
+# 팀 협업 — 하트비트 team_round 전파(단독 writer 불변식 보존)
+# ---------------------------------------------------------------------------
+
+class TestHeartbeatTeamRound:
+    def test_copies_team_round_from_phase_index(self, executor, top_index):
+        executor._top_index_file = top_index
+        idx = json.loads(executor._index_file.read_text())
+        idx["team_round"] = "2/3 IMPROVE"
+        executor._index_file.write_text(json.dumps(idx, ensure_ascii=False))
+        executor._write_heartbeat(2, "ui", attempt=1, done=2, elapsed=10)
+        data = json.loads(top_index.read_text())
+        mvp = next(p for p in data["phases"] if p["dir"] == "0-mvp")
+        assert mvp.get("team_round") == "2/3 IMPROVE"
+
+    def test_absent_team_round_is_fine(self, executor, top_index):
+        executor._top_index_file = top_index
+        executor._write_heartbeat(2, "ui", attempt=1, done=2, elapsed=10)
+        data = json.loads(top_index.read_text())
+        mvp = next(p for p in data["phases"] if p["dir"] == "0-mvp")
+        assert "team_round" not in mvp
+
+    def test_team_round_cleared_on_terminal(self, executor, top_index):
+        data = json.loads(top_index.read_text())
+        for p in data["phases"]:
+            if p["dir"] == "0-mvp":
+                p["status"] = "running"
+                p["team_round"] = "1/3 IMPROVE"
+        top_index.write_text(json.dumps(data))
+        executor._top_index_file = top_index
+        executor._update_top_index("completed")
+        after = json.loads(top_index.read_text())
+        mvp = next(p for p in after["phases"] if p["dir"] == "0-mvp")
+        assert "team_round" not in mvp
+
+
+# ---------------------------------------------------------------------------
+# 팀 협업 — 에이전트 정의(.claude/agents) frontmatter (재사용 스캐폴드 검증)
+# ---------------------------------------------------------------------------
+
+class TestAgentDefinitions:
+    AGENTS_DIR = Path(__file__).resolve().parent.parent / ".claude" / "agents"
+
+    def _frontmatter(self, name):
+        text = (self.AGENTS_DIR / f"{name}.md").read_text(encoding="utf-8")
+        assert text.startswith("---"), f"{name}.md must start with YAML frontmatter"
+        fm = text.split("---", 2)[1]
+        out = {}
+        for line in fm.strip().splitlines():
+            if ":" in line:
+                k, v = line.split(":", 1)
+                out[k.strip()] = v.strip()
+        return out
+
+    def test_three_agent_files_exist(self):
+        for name in ("max", "joy", "esther"):
+            assert (self.AGENTS_DIR / f"{name}.md").exists(), f"{name}.md missing"
+
+    def test_names_match_filenames(self):
+        for name in ("max", "joy", "esther"):
+            assert self._frontmatter(name)["name"] == name
+
+    def test_all_models_opus_4_8(self):
+        for name in ("max", "joy", "esther"):
+            assert self._frontmatter(name)["model"] == "claude-opus-4-8"
+
+    def test_colors(self):
+        expected = {"max": "blue", "joy": "pink", "esther": "yellow"}
+        for name, color in expected.items():
+            assert self._frontmatter(name)["color"] == color
+
+    def test_each_has_description(self):
+        for name in ("max", "joy", "esther"):
+            assert self._frontmatter(name).get("description")
+
+    def test_joy_defines_verdict_sentinels(self):
+        text = (self.AGENTS_DIR / "joy.md").read_text(encoding="utf-8")
+        assert "VERDICT: PASS" in text
+        assert "VERDICT: IMPROVE" in text
+
+    def test_esther_references_ui_guide(self):
+        text = (self.AGENTS_DIR / "esther.md").read_text(encoding="utf-8")
+        assert "UI_GUIDE" in text

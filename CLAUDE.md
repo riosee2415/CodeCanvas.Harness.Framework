@@ -14,6 +14,20 @@
 ## 개요
 {한두 문장 — 새 팀원에게 설명하듯. 이 프로젝트가 무엇을 하는가.}
 
+## 팀 협업 (Max·Joy·Esther)
+실질적 개발 작업은 **3-에이전트 팀**으로 수행한다 (정의: `.claude/agents/`).
+
+| 에이전트 | 역할 | 모델·색 |
+|---|---|---|
+| **Max** | 개발/엔지니어 — 구현·TDD | opus-4-8 · 🔵 |
+| **Joy** | 검수자 — git diff + AC 재실행으로 통과/개선 판정 | opus-4-8 · 🩷 |
+| **Esther** | UI/UX — 디자인·프론트엔드 (UI step만 투입) | opus-4-8 · 🟡 |
+
+- **하네스**: `python3 scripts/execute.py <task>`의 각 step은 팀 리드(헤드리스 세션)가 Max→(Esther)→Joy 루프로 자동 수행한다.
+- **인터랙티브**: `/team <작업>`으로 같은 팀을 호출한다.
+- Joy는 보고 끝줄에 `VERDICT: PASS`/`VERDICT: IMPROVE`를 찍고, PASS는 AC `exit 0` 근거가 있을 때만 유효하다.
+- 모든 팀 대화·보고는 **한국어**로 한다.
+
 ## 기술 스택
 - {프레임워크 (예: Next.js 15)}
 - {언어 (예: TypeScript strict mode)}
