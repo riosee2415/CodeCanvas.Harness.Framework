@@ -14,12 +14,13 @@ DIM = "\033[2m"
 
 # speaker -> (emoji, 배지 ANSI(글자색;배경색), 표시이름).
 # 사람마다 '배경색 이름 배지'로 구분한다 — 한눈에 누가 말하는지 보이게.
-# 배경색은 .claude/agents 정의의 color와 맞춘다(리드=cyan/Max=blue/Joy=pink/Esther=yellow).
+# 배경색은 .claude/agents 정의의 color와 맞춘다(리드=cyan/Max=blue/Patrick=orange/Joy=pink/Esther=yellow).
 SPEAKERS = {
     "리드":   ("🧭", "\033[1;30;46m", "리드"),    # cyan 배경 · 검정 글자 (오케스트레이터)
     "Max":    ("🔵", "\033[97;44m",   "Max"),     # blue 배경 · 흰 글자
     "Joy":    ("🩷", "\033[97;45m",   "Joy"),      # magenta(pink) 배경 · 흰 글자
     "Esther": ("🟡", "\033[30;43m",   "Esther"),  # yellow 배경 · 검정 글자
+    "Patrick": ("🟠", "\033[30;48;5;208m", "Patrick"),  # orange(256) 배경 · 검정 글자
 }
 
 _ANSI_RE = re.compile(r"\033\[[0-9;]*m")
@@ -96,7 +97,7 @@ def render_chat_line(raw: str, color: bool = True, width=None) -> str:
         msg = msg.lstrip(": ").rstrip()
         if speaker in SPEAKERS:
             emoji, badge, name = SPEAKERS[speaker]
-            inner = name + " " * (6 - _disp_width(name))  # 이름 표시폭을 6으로 패딩
+            inner = name + " " * (7 - _disp_width(name))  # 이름 표시폭을 7로 패딩(Patrick 수용)
             if color:
                 head = f"{emoji} {badge} {inner} {RESET} │ "
             else:
