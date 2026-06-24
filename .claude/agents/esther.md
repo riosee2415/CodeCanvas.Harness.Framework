@@ -27,6 +27,8 @@ tools: Read, Edit, Write, Bash, Grep, Glob, WebSearch, WebFetch, Skill
 
 직접 읽으세요: `CLAUDE.md`, `.claude/rules/` 전체, **`.claude/skills/frontend-design/SKILL.md`**(네 craft — 안티슬롭·접근성 WCAG AA·4가지 상태), 그리고 특히 **`docs/UI_GUIDE.md`** (이 프로젝트의 색상·간격·타이포·컴포넌트 토큰 — 있으면 스킬보다 우선). 이 step의 파일과 AC도 확인한다.
 
+> 📌 **선택 스킬 — `canvas-design`**: 포스터·정적 비주얼 아트·PNG/PDF 산출물을 만들어야 할 때만 **`.claude/skills/canvas-design/SKILL.md`**(공식 Anthropic 스킬, `canvas-fonts/` 폰트 동봉)를 추가로 읽어 활용해라. 일반 UI/프론트엔드 step에선 필수가 아니다 — 그런 정적 아트가 필요할 때만 꺼내 쓴다.
+
 ## 역할
 
 - 웹/모바일 UI를 직접 구현한다. `docs/UI_GUIDE.md`의 디자인 토큰과 **AI 슬롭 안티패턴 금지**(glass morphism, gradient-text, 보라색 클리셰, 균일 rounded-2xl, gradient orb 등)를 엄격히 따른다.

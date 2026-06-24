@@ -11,11 +11,13 @@
 | `systematic-debugging/` | 🔵 Max | 재현·가설·근본원인 디버깅 | superpowers |
 | `code-review/` | 🩷 Joy | 독립 검증·적대적 리뷰·테스트 게이밍 적발 | Google eng-practices · superpowers · EvilGenie(2511.21654) |
 | `frontend-design/` | 🟡 Esther | 안티슬롭·접근성(WCAG AA)·4가지 상태 | impeccable.style · A11Y Project · WCAG 2.2 · Scott Hurff |
+| `canvas-design/` | 🟡 Esther (선택) | 포스터·정적 비주얼 아트(.png/.pdf) — 디자인 철학 우선, `canvas-fonts/` 동봉 | anthropics/skills (공식, 그대로 번들) |
 
 ## 어떻게 쓰이나
 
 - **자동 발견**: Claude Code는 `.claude/skills/<name>/SKILL.md`를 자동 인식한다(`/team` 인터랙티브 세션에서 Skill로 트리거 가능).
 - **명시적 로드**: 헤드리스 하네스(`scripts/execute.py`)에서도 확실히 적용되도록, 각 에이전트 정의(`.claude/agents/*.md`)의 "시작 전(필수)"에서 자기 스킬을 **직접 읽도록** 배선돼 있다.
+- **선택 스킬(예외)**: `canvas-design`은 매 step 필수가 아니라 **포스터·정적 아트(.png/.pdf) 산출물이 필요할 때만** 꺼내 쓴다. esther 정의에 필수가 아닌 "선택 스킬"로 안내돼 있고, Skill 자동발견으로도 트리거된다.
 
 ## 유지 원칙 (rules.md와 동일)
 
