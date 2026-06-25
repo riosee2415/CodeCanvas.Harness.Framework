@@ -176,7 +176,7 @@ execute.py가 자동으로 처리하는 것:
 - `feat-{task-name}` 브랜치 생성/checkout
 - 가드레일 주입 — CLAUDE.md + `.claude/rules/*.md` + docs/*.md 내용을 매 step 프롬프트에 포함
 - 컨텍스트 누적 — 완료된 step의 summary를 다음 step 프롬프트에 전달
-- 팀 협업 — 각 step을 팀 리드가 Max→(Esther)→Joy 루프로 수행하고, Joy 판정(통과/개선)으로 내부 최대 3회 개선 (G 참조)
+- 팀 협업 — 각 step을 팀 리드가 Max→(Patrick)→(Esther)→Joy 루프로 수행하고, Joy 판정(통과/개선)으로 내부 최대 3회 개선 (G 참조)
 - 자가 교정(2층) — 내부 팀 루프(`INNER_ROUNDS`=3) + 바깥 재시도(`OUTER_ATTEMPTS`=2, 프로세스 실패·타임아웃 복구), 이전 에러·stderr 꼬리를 다음 프롬프트에 피드백
 - 2단계 커밋 — 코드 변경(`feat`)과 메타데이터(`chore`)를 분리 커밋
 - 타임스탬프 — started_at, completed_at, failed_at, blocked_at 자동 기록
@@ -208,29 +208,31 @@ execute.py가 자동으로 처리하는 것:
 
 **재사용 커스터마이즈 (project-agnostic):** `.claude/settings.json`의 훅은 **스택 중립 기본값**이다 — `Stop` 훅은 no-op(`exit 0`)이니 프로젝트 빌드·테스트 체크는 `settings.local.json`에 추가하라(예: `npm run test` / `pytest -q`). `PreToolUse` Bash 가드는 흔한 파괴적 명령(`rm -rf`·`git reset --hard` 등)에 대한 **best-effort 속도방지턱일 뿐 보안 경계가 아니다**(정규식은 모든 우회를 막지 못한다) — 진짜 경계는 신뢰할 수 없는 코드를 실행하지 않는 것이다.
 
-### G. 팀 협업 (Max·Joy·Esther)
+### G. 팀 협업 (Max·Patrick·Joy·Esther)
 
-각 step은 단일 세션이 아니라 **팀 리드(헤드리스 세션)가 3-에이전트를 지휘**하는 루프로 수행된다. 에이전트 정의는 `.claude/agents/`에 있고(전부 project-agnostic), 인터랙티브로는 `/team <작업>`으로 같은 팀을 호출한다. 각 에이전트는 시작 전 `.claude/skills/`의 자기 craft 스킬(Max: TDD·디버깅, Joy: 코드리뷰, Esther: 프론트 안티슬롭)을 직접 읽어 적용한다 — 프로젝트 동봉이라 클론하면 그대로 레벨업된다(인덱스: `.claude/skills/README.md`).
+각 step은 단일 세션이 아니라 **팀 리드(헤드리스 세션)가 4-에이전트를 지휘**하는 루프로 수행된다. 에이전트 정의는 `.claude/agents/`에 있고(전부 project-agnostic), 인터랙티브로는 `/team <작업>`으로 같은 팀을 호출한다. 각 에이전트는 시작 전 `.claude/skills/`의 자기 craft 스킬(Max: TDD·디버깅, Patrick: 데이터(스키마·마이그레이션·검증), Joy: 코드리뷰, Esther: 프론트 안티슬롭)을 직접 읽어 적용한다 — 프로젝트 동봉이라 클론하면 그대로 레벨업된다(인덱스: `.claude/skills/README.md`).
 
 | 에이전트 | 역할 | 모델·색 |
 |---|---|---|
 | **Max** | 개발/엔지니어 — 구현·TDD | opus-4-8 · 🔵 |
+| **Patrick** | 데이터 — DB 설계·운영·서빙·정형화 (데이터 step만 투입) | opus-4-8 · 🟠 |
 | **Joy** | 검수자 + **규칙 수호자** — git diff+AC로 통과/개선 판정, 반복 실수를 규칙으로 제안(F) | opus-4-8 · 🩷 |
 | **Esther** | UI/UX — 디자인·프론트엔드 (UI step만 투입) | opus-4-8 · 🟡 |
 
 루프 (팀 리드가 `execute.py` preamble의 "팀 협업 프로토콜"에 따라 수행):
 
 1. **Max**가 step을 구현 → 한국어 보고.
-2. UI·디자인 신호가 있으면 **Esther** 투입(순수 백엔드면 생략).
-3. 리드가 step의 AC를 직접 실행해 결과(커맨드 + exit code) 확보.
-4. **Joy**가 git diff + AC 결과로 검수 → 보고 끝줄에 `VERDICT: PASS` 또는 `VERDICT: IMPROVE`.
-5. `IMPROVE`면 Joy의 `개선지시(→Max)`로 수정→재검수, **내부 최대 3회**(`INNER_ROUNDS`).
+2. 데이터·DB·스키마·마이그레이션·쿼리·ETL 신호가 있으면 **Patrick**(데이터) 투입(순수 비-데이터면 생략).
+3. UI·디자인 신호가 있으면 **Esther** 투입(순수 백엔드면 생략).
+4. 리드가 step의 AC를 직접 실행해 결과(커맨드 + exit code) 확보.
+5. **Joy**가 git diff + AC 결과로 검수 → 보고 끝줄에 `VERDICT: PASS` 또는 `VERDICT: IMPROVE`.
+6. `IMPROVE`면 Joy의 `개선지시(→Max)`로 수정→재검수, **내부 최대 3회**(`INNER_ROUNDS`).
    - **Fail-safe**: 센티넬을 못 찾으면 IMPROVE 처리(자동 PASS 금지). `PASS`는 AC `exit 0` 근거가 있을 때만 유효.
    - **검증자 실패**: Joy 무응답이면 리드가 자가 승인하지 않고 `error`(verifier unavailable).
    - **미해결**: 내부 3회로도 안 되면 `error` + `no_retry: true` + Joy의 마지막 지시를 `error_message`에.
-6. 진행하며 팀의 한국어 대화를 `phases/{task}/chat.md`에 `[리드]/[Max]/[Joy]/[Esther]` 대화체로 실시간 append한다(코드·diff 없이). phase-level `index.json`의 `team_round`로 진행도 노출(하트비트가 top-index로 복사).
+7. 진행하며 팀의 한국어 대화를 `phases/{task}/chat.md`에 `[리드]/[Max]/[Patrick]/[Joy]/[Esther]` 대화체로 실시간 append한다(코드·diff 없이). phase-level `index.json`의 `team_round`로 진행도 노출(하트비트가 top-index로 복사).
 
-**실시간 대화창 (프레임워크의 핵심 — 기본값)**: 팀 대화를 터미널에 채팅처럼 실시간으로 본다 — **배경색 이름 배지**(🔵 Max · 🩷 Joy · 🟡 Esther · 🧭 리드)로 누가 말하는지 한눈에, 긴 줄은 터미널 폭에 맞춰 **줄바꿈**되어 '...' 잘림 없이 다 보인다(작은 모니터 OK).
+**실시간 대화창 (프레임워크의 핵심 — 기본값)**: 팀 대화를 터미널에 채팅처럼 실시간으로 본다 — **배경색 이름 배지**(🔵 Max · 🟠 Patrick · 🩷 Joy · 🟡 Esther · 🧭 리드)로 누가 말하는지 한눈에, 긴 줄은 터미널 폭에 맞춰 **줄바꿈**되어 '...' 잘림 없이 다 보인다(작은 모니터 OK).
 
 - **`python3 scripts/run.py <task>`** (권장): 하네스를 **백그라운드 자식 프로세스**로 돌리고(콘솔은 `phases/<task>/harness.log`로 숨김) **대화만** 컬러로 흘린다. 하네스가 끝나면 뷰어도 자동 종료. → "하네스는 백그라운드, 대화는 현재 터미널."
 - **`python3 scripts/chat.py`** (상시 대화창): phase에 안 묶인다. 한 번 띄워두면 `phases/*/chat.md` 중 **지금 가장 최근에 쓰이는** 것(=활성 하네스)을 자동으로 따라가고, 다른 phase의 하네스가 새로 돌면 그 대화로 **자동 전환**(전환 배너 표시). 하네스가 끝나도 뷰어는 살아남아 다음 하네스를 기다린다(Ctrl-C 종료). 옆 터미널에서 `execute.py <task> --quiet`로 하네스를 돌리면 이중 표시 없이 chat.py가 표시를 전담한다. 시작 전 이미 쌓인 줄은 다시 토하지 않고 **그 뒤 새 줄만** 라이브로 보여준다.
