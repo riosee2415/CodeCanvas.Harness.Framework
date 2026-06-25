@@ -14,19 +14,20 @@
 ## 개요
 {한두 문장 — 새 팀원에게 설명하듯. 이 프로젝트가 무엇을 하는가.}
 
-## 팀 협업 (Max·Joy·Esther)
-실질적 개발 작업은 **3-에이전트 팀**으로 수행한다 (정의: `.claude/agents/`).
+## 팀 협업 (Max·Patrick·Joy·Esther)
+실질적 개발 작업은 **4-에이전트 팀**으로 수행한다 (정의: `.claude/agents/`).
 
 | 에이전트 | 역할 | 모델·색 |
 |---|---|---|
 | **Max** | 개발/엔지니어 — 구현·TDD | opus-4-8 · 🔵 |
+| **Patrick** | 데이터 — DB 설계·운영·서빙·정형화 (데이터 step만 투입) | opus-4-8 · 🟠 |
 | **Joy** | 검수자 — git diff + AC 재실행으로 통과/개선 판정 | opus-4-8 · 🩷 |
 | **Esther** | UI/UX — 디자인·프론트엔드 (UI step만 투입) | opus-4-8 · 🟡 |
 
-- **하네스**: `python3 scripts/run.py <task>`(권장 — 하네스는 백그라운드, 컬러 대화만 실시간) 또는 `python3 scripts/execute.py <task>`. 각 step은 팀 리드(헤드리스 세션)가 Max→(Esther)→Joy 루프로 자동 수행한다.
+- **하네스**: `python3 scripts/run.py <task>`(권장 — 하네스는 백그라운드, 컬러 대화만 실시간) 또는 `python3 scripts/execute.py <task>`. 각 step은 팀 리드(헤드리스 세션)가 Max→(Patrick)→(Esther)→Joy 루프로 자동 수행한다.
 - **인터랙티브**: `/team <작업>`으로 같은 팀을 호출한다.
-- **스킬(craft 역량)**: 각 에이전트는 시작 전 `.claude/skills/`의 자기 스킬을 로드한다 — Max: TDD·디버깅, Joy: 코드리뷰(독립검증), Esther: 프론트 안티슬롭·접근성. 프로젝트에 동봉되어 클론하면 그대로 적용된다(인덱스: `.claude/skills/README.md`).
-- **실시간 대화창(기본값·프레임워크 핵심)**: 팀의 한국어 대화가 `phases/<task>/chat.md`에 흐르며 터미널에 채팅처럼 표시된다 — **배경색 이름 배지**(🔵 Max · 🩷 Joy · 🟡 Esther · 🧭 리드), 긴 줄은 폭에 맞춰 줄바꿈. 세 가지 보기 방식:
+- **스킬(craft 역량)**: 각 에이전트는 시작 전 `.claude/skills/`의 자기 스킬을 로드한다 — Max: TDD·디버깅, Patrick: 데이터(스키마·마이그레이션·검증), Joy: 코드리뷰(독립검증), Esther: 프론트 안티슬롭·접근성. 프로젝트에 동봉되어 클론하면 그대로 적용된다(인덱스: `.claude/skills/README.md`).
+- **실시간 대화창(기본값·프레임워크 핵심)**: 팀의 한국어 대화가 `phases/<task>/chat.md`에 흐르며 터미널에 채팅처럼 표시된다 — **배경색 이름 배지**(🔵 Max · 🟠 Patrick · 🩷 Joy · 🟡 Esther · 🧭 리드), 긴 줄은 폭에 맞춰 줄바꿈. 세 가지 보기 방식:
   - `python3 scripts/run.py <task>` — 한 phase: 하네스를 백그라운드로 돌리고 이 터미널에 대화만, 끝나면 자동 종료 (권장·간편).
   - `python3 scripts/chat.py` — **상시 대화창**: 한 번 띄워두면 phase에 안 묶이고, 어떤 phase의 하네스가 돌든 그 대화로 자동 연결·전환. 여러 phase를 연속으로 돌릴 때. 하네스는 옆에서 `python3 scripts/execute.py <task> --quiet`로 돌린다(`--quiet`는 하네스 자체 인라인 표시를 꺼 chat.py와 이중 표시 방지).
   - `python3 scripts/watch.py <task>` — 특정 phase 하나에 고정해 보는 뷰어.
