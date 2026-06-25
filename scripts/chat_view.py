@@ -1,7 +1,7 @@
 """팀 대화창 렌더링 — 에이전트들의 실시간 대화를 채팅처럼 보여준다.
 
 execute.py(실행 중 인라인 기본값)와 watch.py(별도 뷰어)가 공유한다.
-chat.md의 각 줄은 `[speaker] message` 형식이며, speaker는 리드/Max/Joy/Esther.
+chat.md의 각 줄은 `[speaker] message` 형식이며, speaker는 리드/Max/Joy/Esther/Patrick.
 """
 
 import re
@@ -20,7 +20,7 @@ SPEAKERS = {
     "Max":    ("🔵", "\033[97;44m",   "Max"),     # blue 배경 · 흰 글자
     "Joy":    ("🩷", "\033[97;45m",   "Joy"),      # magenta(pink) 배경 · 흰 글자
     "Esther": ("🟡", "\033[30;43m",   "Esther"),  # yellow 배경 · 검정 글자
-    "Patrick": ("🟠", "\033[30;48;5;208m", "Patrick"),  # orange(256) 배경 · 검정 글자
+    "Patrick": ("🟠", "\033[30;48;5;208m",  "Patrick"), # orange(256) 배경 · 검정 글자
 }
 
 _ANSI_RE = re.compile(r"\033\[[0-9;]*m")
