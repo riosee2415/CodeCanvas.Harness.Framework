@@ -439,6 +439,21 @@ class StepExecutor:
         except OSError:
             pass
 
+    def _chat_verify_meta(self, step_obj: dict):
+        """완료 step의 검수 결과(team_round)를 [검수·meta] 줄로 chat.md에 사실 그대로 표면화한다.
+
+        team_round는 리드가 ground-truth(AC exit 0) 결박 하에 기록한 판정이다. 여기서는
+        그 사실을 대화창에 기계적으로 박을 뿐, 새 판정을 만들지 않는다(없으면 무동작).
+        """
+        round_info = step_obj.get("team_round")
+        if not round_info:
+            return
+        try:
+            with open(self._chat_path(), "a", encoding="utf-8") as f:
+                f.write(f"[검수·meta] round={round_info}\n")
+        except OSError:
+            pass
+
     @contextlib.contextmanager
     def _chat_tailer(self):
         """step 실행 동안 chat.md의 새 줄을 실시간으로 터미널에 채팅처럼 출력한다.
@@ -837,6 +852,7 @@ class StepExecutor:
             if status == "completed":
                 step_obj["completed_at"] = ts
                 self._write_json(self._index_file, index)
+                self._chat_verify_meta(step_obj)        # ← 검수 메타를 chat.md에 표면화
                 self._commit_step(step_num, step_name)
                 print(f"  ✓ Step {step_num}: {step_name} [{elapsed}s]")
                 return True

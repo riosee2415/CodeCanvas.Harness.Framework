@@ -1789,3 +1789,46 @@ class TestSettingsHooks:
         assert "--recursive" in cmd          # rm 변형까지 broaden
         assert "delete" in cmd               # find ... -delete
         assert "with-lease" not in cmd       # --force-with-lease 오탐 차단(명시 제외 안 함)
+
+
+# ---------------------------------------------------------------------------
+# Task 2: _chat_verify_meta — step 완료 시 검수 메타 줄 chat.md에 기계 append
+# ---------------------------------------------------------------------------
+
+def _make_executor(tmp_path, steps):
+    """테스트용 StepExecutor 인스턴스(phase dir + index.json + chat.md 구성)."""
+    d = tmp_path / "phases" / "test-phase"
+    d.mkdir(parents=True, exist_ok=True)
+    index = {"project": "T", "phase": "test", "steps": steps}
+    (d / "index.json").write_text(json.dumps(index, ensure_ascii=False))
+    (d / "chat.md").write_text("", encoding="utf-8")  # chat.md 빈 파일로 초기화
+
+    with patch.object(ex, "ROOT", tmp_path):
+        inst = ex.StepExecutor.__new__(ex.StepExecutor)
+    inst._root = str(tmp_path)
+    inst._phases_dir = tmp_path / "phases"
+    inst._phase_dir = d
+    inst._phase_dir_name = "test-phase"
+    inst._index_file = d / "index.json"
+    inst._top_index_file = tmp_path / "phases" / "index.json"
+    inst._phase_name = "test"
+    inst._total = len(steps)
+    return inst
+
+
+class TestChatVerifyMeta:
+    def test_chat_verify_meta_appends_round_fact(self, tmp_path, monkeypatch):
+        # 기존 테스트와 동일한 방식으로 executor를 만든다(phase dir + index.json + chat.md).
+        ex_inst = _make_executor(tmp_path, steps=[{"step": 0, "name": "x", "status": "completed",
+                                              "team_round": "1/3 PASS"}])
+        step_obj = {"step": 0, "name": "x", "team_round": "1/3 PASS"}
+        ex_inst._chat_verify_meta(step_obj)
+        chat = ex_inst._chat_path().read_text(encoding="utf-8")
+        assert "[검수·meta] round=1/3 PASS" in chat
+
+    def test_chat_verify_meta_noop_without_round(self, tmp_path, monkeypatch):
+        ex_inst = _make_executor(tmp_path, steps=[{"step": 0, "name": "x", "status": "completed"}])
+        before = ex_inst._chat_path().read_text(encoding="utf-8") if ex_inst._chat_path().exists() else ""
+        ex_inst._chat_verify_meta({"step": 0, "name": "x"})   # team_round 없음
+        after = ex_inst._chat_path().read_text(encoding="utf-8") if ex_inst._chat_path().exists() else ""
+        assert before == after                            # 아무것도 추가하지 않음
