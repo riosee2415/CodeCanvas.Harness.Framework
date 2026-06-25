@@ -25,3 +25,7 @@ id_rsa
 id_dsa
 id_ecdsa
 id_ed25519
+
+# 제작 과정 산출물 — 오픈소스 비공개 (기획·계획·SDD 흔적)
+docs/superpowers/
+.superpowers/
