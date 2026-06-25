@@ -275,6 +275,15 @@ class TestBuildPreamble:
         result = executor._build_preamble("", "")
         assert "/phases/0-mvp/index.json" in result
 
+    def test_includes_patrick_data_specialist(self, executor):
+        result = executor._build_preamble("", "")
+        # 멤버·스킬 매핑·Joy 검수 대상에 Patrick 포함
+        assert "Patrick" in result
+        assert "data-engineering" in result
+        assert "Max·Patrick·Esther" in result
+        # 데이터 신호 트리거 문구
+        assert "마이그레이션" in result
+
 
 # ---------------------------------------------------------------------------
 # _update_top_index

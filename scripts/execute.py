@@ -540,18 +540,19 @@ class StepExecutor:
             )
         team_protocol = (
             f"## 팀 협업 프로토콜 (당신 = 팀 리드)\n\n"
-            f"당신은 직접 구현하지 않는다. **Max·Esther·Joy 서브에이전트를 Task 도구로 지휘**하고 모든 대화는 "
+            f"당신은 직접 구현하지 않는다. **Max·Patrick·Esther·Joy 서브에이전트를 Task 도구로 지휘**하고 모든 대화는 "
             f"한국어로 한다. 서브에이전트에는 CLAUDE.md만 자동 로드되므로, 각 서브에이전트에게 "
             f"\"시작 전 CLAUDE.md, .claude/rules/ 전체, **.claude/skills/의 네 craft 스킬**"
-            f"(Max: test-driven-development·systematic-debugging, Joy: code-review, Esther: frontend-design), "
+            f"(Max: test-driven-development·systematic-debugging, Patrick: data-engineering, Joy: code-review, Esther: frontend-design), "
             f"네 작업에 관련된 docs/를 **직접 읽어라**\"라고 지시한다(스킬은 페르소나 말투가 아니라 작업 규율이다).\n\n"
             f"진행 순서:\n"
             f"1. **Max**(개발)에게 이 step 구현을 지시한다.\n"
-            f"2. step에 UI·디자인·프론트엔드 신호가 있으면 **Esther**(UI/UX)를 투입한다(순수 백엔드면 생략, 토큰 절약).\n"
-            f"3. 해당 step의 AC(실행 커맨드)를 **직접 실행**해 결과(커맨드 + exit code)를 확보한다.\n"
-            f"4. **Joy**(검수)에게 **Max·Esther의 작업 전부(git diff)**와 위 AC 결과로 검수를 맡긴다(보안 민감 diff—인증·외부 입력·시크릿 취급—는 code-review 스킬 기준으로 특히 꼼꼼히 본다). Joy는 보고의 **마지막 줄**에 "
+            f"2. step에 **데이터·DB·스키마·마이그레이션·쿼리·ETL·데이터모델링** 신호가 있으면 **Patrick**(데이터)을 투입한다(순수 비-데이터면 생략, 토큰 절약).\n"
+            f"3. step에 UI·디자인·프론트엔드 신호가 있으면 **Esther**(UI/UX)를 투입한다(순수 백엔드면 생략, 토큰 절약).\n"
+            f"4. 해당 step의 AC(실행 커맨드)를 **직접 실행**해 결과(커맨드 + exit code)를 확보한다.\n"
+            f"5. **Joy**(검수)에게 **Max·Patrick·Esther의 작업 전부(git diff)**와 위 AC 결과로 검수를 맡긴다(보안·데이터 민감 diff—인증·외부 입력·시크릿·마이그레이션·데이터 손실—는 code-review 스킬 기준으로 특히 꼼꼼히 본다). Joy는 보고의 **마지막 줄**에 "
             f"정확히 하나의 센티넬을 찍는다: `VERDICT: PASS` 또는 `VERDICT: IMPROVE`. (Joy는 발견한 반복 실수를 규칙으로 제안하는 임무도 갖는다 — 작업규칙 참조.)\n"
-            f"5. 당신은 **그 마지막 센티넬 줄만** 파싱해 루프를 제어한다.\n"
+            f"6. 당신은 **그 마지막 센티넬 줄만** 파싱해 루프를 제어한다.\n"
             f"   - `VERDICT: IMPROVE` → Joy의 `개선지시(→Max)` 불릿을 Max에게 전달해 수정 → Joy 재검수. 내부 최대 **{r}회**.\n"
             f"   - **Fail-safe**: 센티넬이 없거나·둘 이상이거나·변형되면 그 라운드를 IMPROVE로 처리한다 "
             f"(**절대 자동 PASS 금지**). 마지막 라운드였다면 step을 error로.\n"
@@ -559,18 +560,18 @@ class StepExecutor:
             f"code(예: `AC: <cmd> -> exit 0`)를 제시했고 **exit 0일 때만 PASS 유효**. exit가 0이 아닌데 PASS면 "
             f"IMPROVE로 강등한다. (커맨드가 없는 docs-only step은 체크리스트 근거로 대체.)\n"
             f"   - **검증자 실패**: Joy의 Task가 죽거나·무응답이거나·센티넬을 못 찾으면 스스로 PASS를 만들지 말고 "
-            f"step을 error(\"verifier unavailable\")로 두고 멈춘다. (리드 직접처리 폴백은 생산자 Max·Esther에만.)\n"
-            f"6. **실시간 대화창** (이 프레임워크의 핵심 — 사용자는 팀이 일하는 모습을 채팅으로 실시간으로 본다): "
+            f"step을 error(\"verifier unavailable\")로 두고 멈춘다. (리드 직접처리 폴백은 생산자 Max·Patrick·Esther에만.)\n"
+            f"7. **실시간 대화창** (이 프레임워크의 핵심 — 사용자는 팀이 일하는 모습을 채팅으로 실시간으로 본다): "
             f"팀 대화를 phases/{d}/chat.md에 한 줄씩 즉시 쌓는다. **리드**는 step 헤더와 [리드] 메시지(지시·정리)를 쓴다. "
             f"**각 서브에이전트**를 Task로 호출할 때 이 chat.md 경로를 알려주고 '작업하며 **네 페르소나 말투로** [이름] 형식 한 줄을 "
-            f"그때그때 append하라'고 지시한다 (Max=차분·겸손, Joy=밝고 활기참, Esther=따뜻하지만 자신 있게 — 자세한 건 .claude/agents/ 정의). "
+            f"그때그때 append하라'고 지시한다 (Max=차분·겸손, Patrick=장난기 있지만 진중·배려 깊은 사수, Joy=밝고 활기참, Esther=따뜻하지만 자신 있게 — 자세한 건 .claude/agents/ 정의). "
             f"직원들은 가끔(~5%) 실없는 농담도 섞어 사람이 보기 즐겁게 하되, 일·검증은 진지하게 한다. "
             f"팀은 서로 친한 동료라 **편하게 반말로, 마크다운(별표·백틱) 없이, AI 격식 빼고 진짜 사람처럼** 대화한다. "
             f"서브에이전트가 빠뜨리면 리드가 그 팀원 말투로 대신 한 줄 남긴다. **코드·diff·전체 출력 금지** — 무엇을 하고/했는지만 대화체로. "
             f"예: [리드] 맥스, 이 step 좀 맡아줄래? · [Max] 응, 조용히 만들어놨어. pytest도 통과했고 · "
             f"[리드] 조이, 검수 좀 부탁해 · [Joy] 오 맥스 빠르다~ 바로 돌려볼게! exit 0, 통과 🎉\n"
-            f"7. **진행 노출**: phases/{d}/index.json에 \"team_round\" 필드를 갱신한다(예: \"2/{r} IMPROVE\").\n"
-            f"8. **내부 루프 미해결**: 내부 {r}회로도 해결 못 하면(비-blocked) step status를 error로, "
+            f"8. **진행 노출**: phases/{d}/index.json에 \"team_round\" 필드를 갱신한다(예: \"2/{r} IMPROVE\").\n"
+            f"9. **내부 루프 미해결**: 내부 {r}회로도 해결 못 하면(비-blocked) step status를 error로, "
             f"**\"no_retry\": true**를 함께 기록하고 Joy의 마지막 개선지시 top-3를 error_message에 적는다.\n\n"
             f"---\n\n"
         )
@@ -667,7 +668,7 @@ class StepExecutor:
     def _print_header(self):
         print(f"\n{'='*60}")
         print(f"  💼 팀 하네스 — '{self._project}'")
-        print(f"  팀원   🔵 Max(개발)    🩷 Joy(검수)    🟡 Esther(UI/UX)")
+        print(f"  팀원   🔵 Max(개발)   🟠 Patrick(데이터)   🩷 Joy(검수)   🟡 Esther(UI/UX)")
         print(f"  Phase: {self._phase_name} | Steps: {self._total}")
         if self._auto_push:
             print(f"  Auto-push: enabled")
