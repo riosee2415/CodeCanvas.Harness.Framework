@@ -1,7 +1,8 @@
 """팀 대화창 렌더링 — 에이전트들의 실시간 대화를 채팅처럼 보여준다.
 
 execute.py(실행 중 인라인 기본값)와 watch.py(별도 뷰어)가 공유한다.
-chat.md의 각 줄은 `[speaker] message` 형식이며, speaker는 리드/Max/Joy/Esther/Patrick.
+chat.md의 각 줄은 `[speaker] message` 형식이며, speaker는 리드/Max/Joy/Esther/Patrick
+(한글 별칭 허용 — [패트릭] 등). 미등록 화자도 plain이 아니라 중립 배지로 렌더한다.
 """
 
 import re
@@ -22,6 +23,12 @@ SPEAKERS = {
     "Esther": ("🟡", "\033[30;43m",   "Esther"),  # yellow 배경 · 검정 글자
     "Patrick": ("🟠", "\033[30;48;5;208m",  "Patrick"), # orange(256) 배경 · 검정 글자
 }
+
+# 한글로 적힌 화자 라벨도 같은 배지로 매핑한다 (리드가 [패트릭]처럼 한글로 쓰는 경우 대비).
+ALIASES = {"맥스": "Max", "패트릭": "Patrick", "조이": "Joy", "에스더": "Esther"}
+
+# 미등록 화자도 plain 대괄호로 빠지지 않게 쓰는 중립 배지 (회색 배경 · 흰 글자).
+UNKNOWN_BADGE = ("💬", "\033[97;100m")
 
 _ANSI_RE = re.compile(r"\033\[[0-9;]*m")
 
@@ -95,21 +102,25 @@ def render_chat_line(raw: str, color: bool = True, width=None) -> str:
         speaker, _, msg = line[1:].partition("]")
         speaker = speaker.strip()
         msg = msg.lstrip(": ").rstrip()
+        speaker = ALIASES.get(speaker, speaker)            # 한글 라벨([패트릭]) → 영문 정규화
         if speaker in SPEAKERS:
             emoji, badge, name = SPEAKERS[speaker]
-            inner = name + " " * (7 - _disp_width(name))  # 이름 표시폭을 7로 패딩(Patrick 수용)
-            if color:
-                head = f"{emoji} {badge} {inner} {RESET} │ "
-            else:
-                head = f"{emoji} {inner} │ "
-            pw = _disp_width(_strip_ansi(head))            # 메시지 열의 들여쓰기 폭
-            cols = width if width is not None else _term_width()
-            chunks = _wrap(msg, max(8, cols - pw))
-            indent = " " * pw
-            rendered = head + chunks[0]
-            for c in chunks[1:]:
-                rendered += "\n" + indent + c
-            return rendered
+        else:
+            emoji, badge = UNKNOWN_BADGE                   # 미등록 화자도 중립 배지(plain 방지)
+            name = speaker
+        inner = name + " " * max(0, 7 - _disp_width(name))  # 이름 표시폭을 7로 패딩(Patrick 수용)
+        if color:
+            head = f"{emoji} {badge} {inner} {RESET} │ "
+        else:
+            head = f"{emoji} {inner} │ "
+        pw = _disp_width(_strip_ansi(head))            # 메시지 열의 들여쓰기 폭
+        cols = width if width is not None else _term_width()
+        chunks = _wrap(msg, max(8, cols - pw))
+        indent = " " * pw
+        rendered = head + chunks[0]
+        for c in chunks[1:]:
+            rendered += "\n" + indent + c
+        return rendered
 
     # 구분선(=== Step N ===) 또는 형식 외 줄
     if color:
