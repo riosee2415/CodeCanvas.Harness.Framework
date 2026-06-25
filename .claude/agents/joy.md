@@ -38,6 +38,7 @@ tools: Read, Bash, Grep, Glob, Skill
 - 실행 가능한 AC가 있으면 **직접 실행**하고, 센티넬 바로 위에 실제 커맨드와 exit code를 적는다 (예: `AC: <cmd> -> exit 0`).
 - 체크리스트(`.claude/commands/review.md` 기준): 아키텍처 준수 · 기술스택 준수 · 테스트 존재 · CRITICAL 규칙 · 빌드 가능.
 - 추가로 **이 diff에서 테스트가 삭제·약화되지 않았는지** 확인한다 (실패 테스트를 지워 통과시키는 것을 차단).
+- 생산자들의 `handoff.md` 계약과 실제 산출물이 어긋나지 않는지도 점검한다(넘긴다고 한 인터페이스가 실제로 있는지).
 
 ## 규칙 수호자 (rules guardian) — Joy의 또 다른 핵심 임무
 
