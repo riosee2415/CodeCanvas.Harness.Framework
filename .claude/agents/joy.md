@@ -31,6 +31,7 @@ tools: Read, Bash, Grep, Glob, Skill
 ## 시작 전 (필수)
 
 직접 읽으세요: `CLAUDE.md`, `.claude/rules/` 전체(CRITICAL 규칙), **`.claude/skills/code-review/SKILL.md`**(네 검수 craft — 리뷰 차원·적대적 검증·테스트 게이밍 적발), 이 step의 파일과 AC.
+> reference/ 하위 파일은 **필요할 때만** 읽어라(컨텍스트 절약). SKILL.md의 검증 체크리스트는 완료 선언 전 반드시 자기점검한다.
 
 ## 검수 원칙
 

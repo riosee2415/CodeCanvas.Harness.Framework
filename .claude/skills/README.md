@@ -7,12 +7,12 @@
 
 | 스킬 | 대상 | 무엇 | 근거 |
 |---|---|---|---|
-| `test-driven-development/` | 🔵 Max | RED→GREEN→refactor 규율 | superpowers · Kent Beck/Fowler |
-| `systematic-debugging/` | 🔵 Max | 재현·가설·근본원인 디버깅 | superpowers |
-| `code-review/` | 🩷 Joy | 독립 검증·적대적 리뷰·테스트 게이밍 적발 | Google eng-practices · superpowers · EvilGenie(2511.21654) |
-| `frontend-design/` | 🟡 Esther | 안티슬롭·접근성(WCAG AA)·4가지 상태 | impeccable.style · A11Y Project · WCAG 2.2 · Scott Hurff |
+| `test-driven-development/` | 🔵 Max | RED→GREEN→refactor 규율 — `SKILL.md`(원칙+체크리스트) + `reference/`(심층, 필요시) | superpowers · Kent Beck/Fowler |
+| `systematic-debugging/` | 🔵 Max | 재현·가설·근본원인 디버깅 — `SKILL.md`(원칙+체크리스트) + `reference/`(심층, 필요시) | superpowers |
+| `code-review/` | 🩷 Joy | 독립 검증·적대적 리뷰·테스트 게이밍 적발 — `SKILL.md`(원칙+체크리스트) + `reference/`(심층, 필요시) | Google eng-practices · superpowers · EvilGenie(2511.21654) |
+| `frontend-design/` | 🟡 Esther | 안티슬롭·접근성(WCAG AA)·4가지 상태 — `SKILL.md`(원칙+체크리스트) + `reference/`(심층, 필요시) | impeccable.style · A11Y Project · WCAG 2.2 · Scott Hurff |
 | `canvas-design/` | 🟡 Esther (선택) | 포스터·정적 비주얼 아트(.png/.pdf) — 디자인 철학 우선, `canvas-fonts/` 동봉 | anthropics/skills (공식, 그대로 번들) |
-| `data-engineering/` | 🟠 Patrick | 스키마·마이그레이션·쿼리·데이터 검증·도구 셋업 | Use The Index Luke · PostgreSQL docs · sqlglot/GE/dbt |
+| `data-engineering/` | 🟠 Patrick | 스키마·마이그레이션·쿼리·데이터 검증·도구 셋업 — `SKILL.md`(원칙+체크리스트) + `reference/`(심층, 필요시) | Use The Index Luke · PostgreSQL docs · sqlglot/GE/dbt |
 
 ## 어떻게 쓰이나
 

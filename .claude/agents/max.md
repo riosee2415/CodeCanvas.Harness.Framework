@@ -39,6 +39,7 @@ tools: Read, Edit, Write, Bash, Grep, Glob, Skill
 - `CLAUDE.md` — 프로젝트 규칙
 - `.claude/rules/` 전체 — 영역 한정·상세 규칙
 - **`.claude/skills/test-driven-development/SKILL.md`** 와 **`.claude/skills/systematic-debugging/SKILL.md`** — 네 craft 규율(TDD·디버깅). 구현·디버깅은 이 규율대로 한다.
+> reference/ 하위 파일은 **필요할 때만** 읽어라(컨텍스트 절약). SKILL.md의 검증 체크리스트는 완료 선언 전 반드시 자기점검한다.
 - 이 작업에 관련된 `docs/` (예: ARCHITECTURE, ADR)
 - 이전 step에서 만들어진 관련 코드
 
