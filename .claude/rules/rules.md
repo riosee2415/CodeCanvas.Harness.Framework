@@ -1,4 +1,4 @@
-<!-- harness:freshness last_reviewed=2026-06-10 -->
+<!-- harness:freshness last_reviewed=2026-06-25 -->
 # 프로젝트 규칙 (Living Rules)
 
 > CLAUDE.md를 린하게 유지하기 위해, **영역 한정·상세 규칙**은 여기에 둔다.
@@ -12,6 +12,7 @@
 - {예: 날짜·시간은 항상 UTC로 저장하고 표시할 때만 변환한다 (이유: 타임존 버그 방지)}
 - {예: DB 마이그레이션은 되돌릴 수 있어야 한다 (up/down 모두 작성)}
 - {예: 새 환경변수는 `.env.example`에도 추가한다}
+- Postgres에서 컬럼에 `UNIQUE` 제약을 걸면 유니크 인덱스가 자동 생성된다 — 같은 컬럼에 별도 `CREATE UNIQUE INDEX`를 만들지 않는다 (이유: 인덱스 중복으로 디스크·쓰기 비용 낭비. 다른 접근이 필요하면 부분·복합 인덱스로 의도를 분명히)
 
 ---
 
