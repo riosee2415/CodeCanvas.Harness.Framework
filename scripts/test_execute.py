@@ -1834,6 +1834,22 @@ class TestChatVerifyMeta:
         after = ex_inst._chat_path().read_text(encoding="utf-8") if ex_inst._chat_path().exists() else ""
         assert before == after                            # 아무것도 추가하지 않음
 
+    def test_chat_verify_meta_fallback_to_index_top_level(self, tmp_path):
+        """step 객체엔 team_round가 없고 index 최상위에만 있는 케이스에서
+        [검수·meta] round=... 줄이 chat.md에 append되어야 한다.
+        이 테스트는 폴백 구현 전에는 반드시 FAIL(no-op)해야 한다."""
+        ex_inst = _make_executor(tmp_path, steps=[{"step": 0, "name": "x", "status": "completed"}])
+        # index 최상위에 team_round를 기록 (step 객체에는 없음)
+        index = json.loads(ex_inst._index_file.read_text(encoding="utf-8"))
+        index["team_round"] = "2/3 IMPROVE"
+        ex_inst._index_file.write_text(json.dumps(index, ensure_ascii=False))
+
+        step_obj = {"step": 0, "name": "x"}   # team_round 키 없음
+        ex_inst._chat_verify_meta(step_obj)
+
+        chat = ex_inst._chat_path().read_text(encoding="utf-8")
+        assert "[검수·meta] round=2/3 IMPROVE" in chat
+
 
 # ---------------------------------------------------------------------------
 # Task 3: _build_preamble — 게이팅 룰 + 생산자 메타 규약 + 핸드오프 규약

@@ -445,7 +445,7 @@ class StepExecutor:
         team_round는 리드가 ground-truth(AC exit 0) 결박 하에 기록한 판정이다. 여기서는
         그 사실을 대화창에 기계적으로 박을 뿐, 새 판정을 만들지 않는다(없으면 무동작).
         """
-        round_info = step_obj.get("team_round")
+        round_info = step_obj.get("team_round") or self._read_json(self._index_file).get("team_round")
         if not round_info:
             return
         try:
