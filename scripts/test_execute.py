@@ -1813,6 +1813,7 @@ def _make_executor(tmp_path, steps):
     inst._top_index_file = tmp_path / "phases" / "index.json"
     inst._phase_name = "test"
     inst._total = len(steps)
+    inst._project = "T"
     return inst
 
 
@@ -1832,3 +1833,16 @@ class TestChatVerifyMeta:
         ex_inst._chat_verify_meta({"step": 0, "name": "x"})   # team_round 없음
         after = ex_inst._chat_path().read_text(encoding="utf-8") if ex_inst._chat_path().exists() else ""
         assert before == after                            # 아무것도 추가하지 않음
+
+
+# ---------------------------------------------------------------------------
+# Task 3: _build_preamble — 게이팅 룰 + 생산자 메타 규약 + 핸드오프 규약
+# ---------------------------------------------------------------------------
+
+def test_preamble_has_gating_and_meta_handoff(tmp_path):
+    ex_inst = _make_executor(tmp_path, steps=[{"step": 0, "name": "x", "status": "pending"}])
+    p = ex_inst._build_preamble("guard", "ctx", None)
+    assert "trivial" in p and "standard" in p and "complex" in p   # 난이도 게이팅 룰
+    assert "·meta]" in p                                            # 생산자 메타 규약 예시
+    assert "handoff.md" in p                                        # 핸드오프 계약 파일
+    assert "Joy" in p and "항상" in p                               # 검수는 난이도 무관 항상

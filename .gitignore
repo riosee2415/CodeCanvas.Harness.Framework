@@ -8,6 +8,7 @@ tsconfig.tsbuildinfo
 phases/**/phase*-output.json
 phases/**/step*-output.json
 phases/**/harness.log
+phases/**/handoff.md
 
 # harness 동시 실행 락 (커밋 금지)
 .harness.lock
