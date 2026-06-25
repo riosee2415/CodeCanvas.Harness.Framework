@@ -86,6 +86,22 @@ def _wrap(text: str, width: int) -> list:
     return out
 
 
+META_INDENT = 13   # 대화 배지 head 표시폭 — 보조 줄을 메시지 시작 열에 맞춘다
+
+
+def _render_aux(prefix, body, color=True, width=None):
+    """메타·핸드오프 보조 줄: dim + 대화 메시지 열 들여쓰기 + 폭 맞춰 wrap (대화 배지 아님)."""
+    cols = width if width is not None else _term_width()
+    avail = max(8, cols - META_INDENT - _disp_width(prefix) - 1)
+    chunks = _wrap(body, avail)
+    pad = " " * META_INDENT
+    cont = " " * (META_INDENT + _disp_width(prefix) + 1)
+    text = f"{pad}{prefix} {chunks[0]}"
+    for c in chunks[1:]:
+        text += "\n" + cont + c
+    return f"{DIM}{text}{RESET}" if color else text
+
+
 def render_chat_line(raw: str, color: bool = True, width=None) -> str:
     """원시 대화 로그 한 줄을 채팅 형식으로 렌더한다.
 
@@ -102,7 +118,11 @@ def render_chat_line(raw: str, color: bool = True, width=None) -> str:
         speaker, _, msg = line[1:].partition("]")
         speaker = speaker.strip()
         msg = msg.lstrip(": ").rstrip()
-        speaker = ALIASES.get(speaker, speaker)            # 한글 라벨([패트릭]) → 영문 정규화
+        if speaker.endswith("·meta"):                                  # 메타 줄: dim 보조 렌더
+            return _render_aux(f"⟨{speaker.replace('·meta', '·메타')}⟩", msg, color, width)
+        if "→" in speaker:                                             # 핸드오프 줄: dim 보조 렌더
+            return _render_aux(f"↪ {speaker}:", msg, color, width)
+        speaker = ALIASES.get(speaker, speaker)            # (기존) 한글 라벨 정규화
         if speaker in SPEAKERS:
             emoji, badge, name = SPEAKERS[speaker]
         else:

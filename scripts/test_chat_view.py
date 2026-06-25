@@ -52,3 +52,39 @@ def test_divider_stays_dim_not_badge():
     # 구분선(=== ===)은 화자 줄이 아니므로 배지화하지 않는다.
     out = cv.render_chat_line("=== Step 0: greet ===", color=True, width=80)
     assert "│" not in out
+
+
+def test_meta_line_renders_dim_and_indented():
+    out = cv.render_chat_line("[Max·meta] files=greet.py | pytest→exit 0", color=True, width=72)
+    assert "\033[2m" in out            # dim 적용
+    assert "⟨Max·메타⟩" in out          # 메타 라벨(한글화)
+    assert "files=greet.py" in out
+    assert "│" not in out              # 대화 배지가 아님
+
+
+def test_handoff_line_renders_dim_arrow():
+    out = cv.render_chat_line("[Max→Patrick] 넘김: greet(name)->str", color=True, width=72)
+    assert "\033[2m" in out
+    assert "↪ Max→Patrick:" in out
+    assert "넘김: greet(name)->str" in out
+    assert "│" not in out
+
+
+def test_verify_meta_label_is_korean():
+    out = cv.render_chat_line("[검수·meta] AC: pytest→exit 0 | round=1/3 PASS", color=True, width=72)
+    assert "⟨검수·메타⟩" in out
+    assert "round=1/3 PASS" in out
+
+
+def test_normal_dialogue_unchanged_after_meta_support():
+    # 대화 줄은 메타 분기 도입 후에도 배지 형식 그대로
+    out = cv.render_chat_line("[Patrick] 멱등 처리했어", color=True, width=72)
+    assert "🟠" in out and "Patrick" in out and "│" in out
+
+
+def test_long_meta_wraps_and_keeps_indent():
+    body = "files=" + ",".join(f"f{i}.py" for i in range(20))
+    out = cv.render_chat_line(f"[Max·meta] {body}", color=False, width=50)
+    lines = out.split("\n")
+    assert len(lines) >= 2                       # 폭 초과 → wrap
+    assert all(l.startswith(" ") for l in lines) # 모든 줄 들여쓰기 유지
